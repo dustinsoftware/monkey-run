@@ -126,7 +126,7 @@ test('jump onto a giant cliff, ride the banana trail, survive', async ({ page })
   await page.waitForFunction(
     ({ sStart }) => {
       const g = window.__MONKEY_GAME;
-      return g.s >= sStart - (g.speed * 0.2 + 0.5);
+      return g.s >= sStart - (g.speed * 0.24 + 0.6);
     },
     cliff,
     { timeout: 20_000 }
@@ -145,6 +145,27 @@ test('jump onto a giant cliff, ride the banana trail, survive', async ({ page })
   // and after the trail ends he falls back down: keep running a bit more
   await page.waitForTimeout(1500);
   await expect(page.locator('.hud-score')).toBeVisible();
+
+  // REGRESSION (clipping bug): jump TOO LATE so the monkey meets the cliff
+  // face at chest height while still rising. Old code ghosted through the
+  // slab; now it must crash into the wall instead.
+  await page.evaluate(() => {
+    const g = window.__MONKEY_GAME;
+    g.testClearCliffs();
+    return g.testSpawnCliffAhead();
+  }).then((c) => {
+    return page.waitForFunction(
+      ({ sStart }) => {
+        const g = window.__MONKEY_GAME;
+        return g.s >= sStart - g.speed * 0.13; // deliberately late jump
+      },
+      c,
+      { timeout: 20_000 }
+    );
+  });
+  await page.keyboard.press('Space');
+  await expect(page.locator('#gameover-overlay')).toBeVisible({ timeout: 8000 });
+  await shot(page, '09-cliff-clip-crash');
   assertNoErrors();
 });
 

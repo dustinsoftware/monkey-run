@@ -794,9 +794,13 @@ export class MonkeyGame {
       if (!this.grounded) {
         this.vy += GRAVITY * dt;
         this.py += this.vy * dt;
-        if (this.py <= gh && this.vy <= 0) { this.py = gh; this.vy = 0; this.grounded = true; }
+        // Land whenever at/below the surface height — no vy<=0 requirement,
+        // otherwise a rising jump ghosts through the slab and snaps out late.
+        if (this.py <= gh) { this.py = gh; this.vy = 0; this.grounded = true; }
       } else {
-        if (Math.abs(gh - this.py) < 0.45) {
+        if (gh - this.py > 0.45) {
+          this.crash(); // walked/lane-changed into the side of a cliff
+        } else if (Math.abs(gh - this.py) < 0.45) {
           this.py = gh; // stick to surface / step up onto a cliff edge
         } else {
           this.grounded = false; // ran off the end of a cliff → fall!
@@ -817,7 +821,7 @@ export class MonkeyGame {
       // cliff face crash: entered a cliff from the front while too low
       for (const c of this.cliffs) {
         if (prevS < c.sStart && this.s >= c.sStart &&
-            Math.abs(this.x - c.x) <= c.halfW + 0.35 && this.py < c.H - 0.8) {
+            Math.abs(this.x - c.x) <= c.halfW + 0.35 && this.py < c.H - 0.35) {
           this.crash();
         }
       }
