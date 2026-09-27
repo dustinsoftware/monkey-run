@@ -1,0 +1,145 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif;
+  background: #87c8e8;
+}
+
+.game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  touch-action: none;
+}
+
+/* ------------------------------- HUD ------------------------------- */
+.hud {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  gap: 14px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hud-item {
+  background: rgba(20, 30, 20, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-radius: 14px;
+  padding: 8px 18px;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 96px;
+  backdrop-filter: blur(3px);
+}
+
+.hud-label { font-size: 11px; letter-spacing: 2px; opacity: 0.8; }
+.hud-value { font-size: 26px; font-weight: 900; text-shadow: 0 2px 4px rgba(0,0,0,.5); }
+
+/* ----------------------------- Overlays ---------------------------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start; /* keep cards up top so the monkey is visible below */
+  justify-content: center;
+  padding-top: max(24px, 5vh);
+  background: radial-gradient(ellipse at center, rgba(10,25,10,.15), rgba(8,18,8,.55));
+  z-index: 10;
+}
+
+.card {
+  background: linear-gradient(165deg, #fffbea, #ffe9b8);
+  border: 4px solid #7a4a1e;
+  border-radius: 22px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), inset 0 2px 0 rgba(255,255,255,.7);
+  padding: 26px 40px;
+  text-align: center;
+  max-width: 560px;
+  animation: pop .35s cubic-bezier(.2, 1.6, .4, 1) both;
+}
+
+@keyframes pop { from { transform: scale(.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.title {
+  font-size: 46px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  background: linear-gradient(#ffcf3f, #e8842c 60%, #b44d12);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 0 rgba(122, 74, 30, .55));
+}
+
+.title-over { font-size: 46px; }
+.subtitle { margin-top: 8px; color: #6b4a20; font-weight: 600; }
+
+.controls {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 18px 0 20px;
+}
+
+.control {
+  background: #fff3d4;
+  border: 2px solid #d8b070;
+  border-radius: 12px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #5b3c16;
+}
+
+kbd {
+  background: #2f2417;
+  color: #ffe9b8;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  box-shadow: 0 2px 0 #000;
+}
+
+.btn {
+  background: linear-gradient(#7fd13b, #4ea51e);
+  border: 3px solid #2f6b0f;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  padding: 12px 34px;
+  border-radius: 999px;
+  cursor: pointer;
+  text-shadow: 0 2px 2px rgba(0,0,0,.35);
+  box-shadow: 0 6px 0 #2f6b0f, 0 12px 20px rgba(0,0,0,.3);
+  transition: transform .08s ease, box-shadow .08s ease;
+}
+
+.btn:hover { transform: translateY(-2px); }
+.btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #2f6b0f; }
+
+.best { margin-top: 16px; color: #8a5a20; font-weight: 700; }
+
+.stats {
+  display: flex;
+  gap: 26px;
+  justify-content: center;
+  margin: 18px 0 22px;
+}
+
+.stats > div { display: flex; flex-direction: column; }
+.stat-label { font-size: 12px; letter-spacing: 2px; color: #9a6b2c; text-transform: uppercase; }
+.stat-value { font-size: 30px; font-weight: 900; color: #4a2f10; }
