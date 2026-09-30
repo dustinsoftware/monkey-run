@@ -14,37 +14,63 @@ index.html ── src/main.jsx ── src/App.jsx ──────────
 
 | File | Responsibility |
 | ---- | -------------- |
-| `index.html` | Vite entry; single `#root` div + canvas mounted by React |
+| `index.html` | Vite entry; single `#root` div, canvas mounted by React |
 | `src/main.jsx` | `createRoot(...).render(<App />)` — deliberately **no** `StrictMode` (double-mount would create two WebGL renderers on one canvas) |
 | `src/App.jsx` | Phases (`menu`/`playing`/`over`), HUD, overlays, best-score persistence |
 | `src/styles.css` | All styling: HUD chips, overlay cards, buttons |
 | `src/game/engine.js` | `MonkeyGame`: renderer/scene/camera/lights, procedural monkey, physics, spawning, collisions, animation loop |
 | `src/game/track.js` | `TrackPath`: procedurally generated spline (straights, banking curves, hills) sampled every `STEP = 1 m` |
-| `tests/game.spec.js` | Playwright suite + screenshots into `tests/screenshots/` |
+| `tests/game.spec.js` | Playwright suite + screenshots into `tests/screenshots/` (tracked in git) |
+| `playwright.config.js` | testDir/timeouts, `baseURL :5173`, viewport 1280×720, headless, `webServer.reuseExistingServer` |
+| `vite.config.js` | React plugin, `server.port 5173` + `strictPort`, `base` from `PAGES_BASE` |
+| `.github/workflows/deploy.yml` | Builds with `PAGES_BASE=/<repo>/` and publishes `dist/` to GitHub Pages |
+| `package.json` | Scripts: `dev` = `start` = `vite`, `build`, `preview`, `test` = `playwright test` |
 
 ## Coordinate system: track-local space
 
 The path is a piecewise curve integrated forward in 1 m steps and stored in parallel
 arrays (`posArr`, `tanArr`, `upArr`) with a moving `baseIndex`; samples behind the player
-are pruned. Every dynamic object in the game is stored in **track-local coordinates**:
+are pruned (`path.prune(this.s - 80)`). Every dynamic object in the game is stored in
+**track-local coordinates**:
 
 - `s` — arc length along the path (the "forward" axis)
 - `x` — lateral offset from the path centre (lanes: `LANES = [-2.6, 0, 2.6]`)
-- `y` — height above the surface
+- `y` / `py` — height above the surface
 
-Each frame, `syncWorldTransforms()` converts local → world by sampling the path and
-building a basis `(right, up, -tangent)`. Curves, hills and banking therefore come for
-free: obstacles, bananas, cliffs, scenery, the monkey and the camera all ride the same frame.
+`syncWorldTransforms()` converts **scenery, boulders, bananas and cliffs** from local →
+world each frame by sampling the path and building a basis `(right, up, -tangent)`. The
+monkey and camera are *not* handled there; they are placed in the per-state branches of
+`loop()`. Curves, hills and banking therefore come for free: everything rides the same frame.
 
 `TrackPath.addForcedStraight(startS, endS)` reserves a flat straight so rectangular cliff
 monoliths sit flush on the surface; random segment generation truncates before a reserved zone.
 
 ## Engine (`MonkeyGame`)
 
-### Lifecycle states
+### States — and how React sees them
 `this.state`: `menu` (gentle auto-run past scenery) → `playing` → `crashed` (1.4 s skid +
-tumble) → `over` (frozen at the crash site). React mirrors this in `phase`, driven by the
-`onHud` / `onGameOver` callbacks passed into the constructor.
+tumble, then `over`) → `over` (frozen at the crash site).
+
+React has **no** `crashed` phase: `App.jsx` keeps `phase ∈ {menu, playing, over}`, and
+because `crash()` invokes `cb.onGameOver(stats)` synchronously, `phase` becomes `'over'`
+the instant the crash happens — so the game-over overlay is displayed *while* the monkey is
+still tumbling for the next 1.4 s (and the HUD stays visible, since `phase !== 'menu'`).
+
+The engine also calls an optional `cb.onState('playing')` from `start()`; `App.jsx` does not
+supply it today, so it is currently unused.
+
+### Tuning constants (`engine.js`)
+| Constant | Value | Meaning |
+| -------- | ----- | ------- |
+| `LANE_LERP` | 12 | lane-switch responsiveness |
+| `GRAVITY` / `JUMP_VELOCITY` | −38 / 13.5 | apex ≈ 2.4 m — clears boulders, lands on cliffs |
+| `BASE_SPEED` → `MAX_SPEED` | 14 → 36 m/s | ramped by `SPEED_RAMP = 0.04` per metre travelled |
+| `LOOKAHEAD_S` | 130 | spawn distance ahead of the player (fog hides pop-in) |
+| `GEN_AHEAD` / `DESPAWN_BEHIND` | 200 / 26 | path+geometry generated ahead / recycle distance behind |
+| `CHUNK_LEN` | 20 m | road-ribbon chunk length |
+| `CLIFF_H` | 1.9 m | cliff platform height (jump apex ≈ 2.4) |
+
+**Score**: `score = floor(distance) + bananas * 10` (`stats()` also reports `distance`).
 
 ### The monkey
 `buildMonkey()` assembles the character from primitives — no meshes are loaded:
@@ -60,45 +86,74 @@ group (scale 0.85)
 ```
 
 Animation is procedural: `runPhase` drives sine-swung limbs, a bob, head nod and tail wiggle;
-jumping blends toward a fixed jump pose via `jumpBlend`. Materials are shared per-part
-(`brown`, `tan`, `dark`, `white`) — **they are shared across parts, so recolouring one part
-would recolour all of them.**
+jumping blends toward a fixed jump pose via `jumpBlend`. The monkey uses exactly **four**
+materials (`brown`, `tan`, `dark`, `white`) that are each reused across many meshes — they
+are shared *between* parts, so recolouring one part would recolour them all. (Scenery is the
+opposite: `buildTree()` allocates fresh trunk/leaf materials per tree.)
 
 ### World content
 - **Ground**: ribbon chunks (`CHUNK_LEN = 20 m`) swept along the path from a lateral
   `PROFILE` cross-section (road | curb | grass | embankment), vertex-coloured and speckled.
-  A large `basePlane` at `-60 m` fills the sky below the ribbon.
-- **Boulders**: pooled dodecahedra, 1–2 lanes blocked per wave (`spawnWave`), spaced by
-  `spawnGap = clamp(speed * 1.35, 20, 36)`. Banana arcs hover over them as a reward line.
-- **Bananas**: pooled torus segments; collected when within ±0.95 in `s`/`x` and 1.2 in `y`
-  of the monkey's chest (`py + 0.8`).
-- **Giant cliffs** (`CLIFF_H = 1.9 m`, jump apex ≈ 2.4 m): monolith boxes covering 1–3 lanes,
-  scheduled every 180–320 m after the first at ~300 m. A lure banana marks the take-off spot
-  and a trail runs along the top. Landing sticks when within 0.45 m of the surface; walking
-  into a face or running off the end resolves to crash/fall in the `playing` branch.
+  A large `basePlane` at `−60 m` fills the sky below the ribbon.
+- **Scenery**: 34 pooled trees/rocks re-placed ahead of (and behind) the player at lateral
+  `±7.5…28 m`, sunk onto the embankment slope via `dropAtX()` and scaled per item.
+- **Boulder waves** (`spawnWave`): 1–2 lanes blocked, spaced by
+  `spawnGap = clamp(speed * 1.35, 20, 36)`. Waves are skipped when the spawn point falls
+  inside a cliff zone (`sStart − 10 … sEnd + 6`) and suppressed entirely while
+  `s <= noWavesUntil`.
+- **Bananas** come from three sources: an arc of 7 over a boulder (p = 0.6), a 6-banana row
+  down a *free* lane (p = 0.7), and cliff trails. Picked up when within ±0.95 in `s`/`x` and
+  1.2 in `y` of the monkey's chest (`py + 0.8`).
+- **Giant cliffs** (`CLIFF_H = 1.9 m`): monolith boxes covering 1–3 lanes, scheduled every
+  180–320 m after the first at ~300 m. A lure banana marks the take-off spot and a trail runs
+  along the top. Three separate rules govern contact:
+  - **Airborne landing**: while `!grounded`, land (snap to height, `vy = 0`) whenever
+    `py <= groundHeightAt(s, x)` — there is no tolerance band, which is what stops ghosting
+    through the slab on the way up.
+  - **Grounded step/crash**: if the surface is more than `0.45 m` above `py`, crash (walked
+    into a cliff face or lane-changed into its side); within `0.45 m`, stick to it; lower,
+    become airborne and fall off the end.
+  - **Front-face hit**: crossing `sStart` between frames inside the slab's lateral extent at
+    `py < c.H − 0.35` crashes.
+- **Boulder collision**: `|dx| < r + 0.42 && |ds| < r + 0.35 && py < height − 0.4`.
 
 ### Camera & lighting
-The camera rides the path frame 9 m behind the player, at 3.5 m above it, with `camera.up`
-lerped toward the surface normal so banking tilts the view; look-at is 8 m ahead. The sun
-(`DirectionalLight` + shadow map) and the valley floor are repositioned to the player each frame.
+The camera rides the path frame 9 m behind the player at 3.5 m above it, following laterally
+at `x * 0.4`, smoothed with `lerp(dt * 6)`; `camera.up` is lerped toward the surface normal so
+banking tilts the view, and look-at is 8 m ahead at height +1.4 (`x * 0.15`). Crashes add a
+decaying shake. The sun (`DirectionalLight` + shadow map) and the valley floor are
+repositioned to the player each frame.
+
+### Input
+| Control | Key / gesture | Handled by |
+| ------- | ------------- | ---------- |
+| left lane | `←` / `A` | `MonkeyGame.onKeyDown` |
+| right lane | `→` / `D` | `MonkeyGame.onKeyDown` |
+| jump | `Space` / `↑` / `W` | `MonkeyGame.onKeyDown` |
+| start / restart | `Enter` / `Space` (when not playing) | `App.jsx` keydown listener |
+| lane change | swipe horizontally > 40 px | `bindTouch` (pointer events on the canvas) |
+| jump | tap (< 300 ms, < 12 px) | `bindTouch` |
+
+Keyboard input is ignored unless `state === 'playing'`; arrow keys/space are
+`preventDefault`-ed.
 
 ### Test/debug hooks
 `window.__MONKEY_GAME` exposes the live engine (`s`, `speed`, `py`, …) plus:
 
 | Hook | Purpose |
 | ---- | ------- |
-| `testSpawnBananaAtPlayer()` | deterministic banana pickup |
-| `testSpawnBoulderAhead(d)` | unavoidable boulder → natural crash |
-| `testClearCliffs()` | remove cliffs/waves, stop scheduling |
-| `testSpawnCliffAhead()` | full-road cliff beyond generated samples |
+| `testSpawnBananaAtPlayer()` | deterministic banana pickup (spawns at the monkey's chest) |
+| `testSpawnBoulderAhead(d)` | unavoidable boulder in the player's current lane → natural crash |
+| `testClearCliffs()` | remove cliffs **and** active boulders, set `nextCliffS = Infinity` until the next `reset()`. Does *not* stop wave spawning — see `noWavesUntil` below |
+| `testSpawnCliffAhead()` | spawn a full-road cliff beyond generated samples; sets `noWavesUntil = sEnd + 60`; returns `{ sStart, sEnd }` (the tests poll those values) |
 
 ## React shell (`App.jsx`)
 
-- One `<canvas>`; the engine is created once in an effect and stored in a ref.
+- One `<canvas>`; the engine is created once in an effect and stored in a ref
+  (`window.__MONKEY_GAME` for tests, removed on unmount).
 - `phase` state selects which overlay renders: `#menu-overlay`, HUD (`phase !== 'menu'`),
   `#gameover-overlay`.
 - `startGame()` resets HUD/stats, sets `playing`, calls `game.start()`.
-- Keyboard: `Enter`/`Space` starts or restarts whenever `phase !== 'playing'`.
 - Persistence: best score under `localStorage['monkey-dash-best']`.
 
 ## Build & deploy

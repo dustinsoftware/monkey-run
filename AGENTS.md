@@ -24,5 +24,7 @@ in the same change. Screenshots for new visible states go in `tests/screenshots/
 - Everything in-game lives in track-local coordinates (`s`, `x`, `y`) — see architecture doc.
 - The monkey is built from primitives with **shared materials**; never recolour a shared
   material to costume the monkey, add extra meshes instead.
-- Deterministic tests: drive the engine through `window.__MONKEY_GAME` / shop state through
-  `window.__MONKEY_SHOP` rather than hoping random spawns line up.
+- Deterministic tests: drive the game through the engine's debug hooks on `window.__MONKEY_GAME`
+  (`testSpawnBananaAtPlayer`, `testSpawnBoulderAhead`, `testClearCliffs`, `testSpawnCliffAhead`)
+  rather than hoping random spawns line up. Any new persistent subsystem gets its own
+  `window.__*` hook so tests can seed it without clicking.
