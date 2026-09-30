@@ -16,11 +16,14 @@ index.html ── src/main.jsx ── src/App.jsx ──────────
 | ---- | -------------- |
 | `index.html` | Vite entry; single `#root` div, canvas mounted by React |
 | `src/main.jsx` | `createRoot(...).render(<App />)` — deliberately **no** `StrictMode` (double-mount would create two WebGL renderers on one canvas) |
-| `src/App.jsx` | Phases (`menu`/`playing`/`over`), HUD, overlays, best-score persistence |
-| `src/styles.css` | All styling: HUD chips, overlay cards, buttons |
+| `src/App.jsx` | Phases (`menu`/`playing`/`over`/`shop`), HUD, overlays, best-score + banana banking |
+| `src/shop/store.js` | Observable costume-shop store (wallet, owned ids, purchases→price, worn); `window.__MONKEY_SHOP` |
+| `src/shop/CostumeShop.jsx` | Costume shop bottom-sheet overlay: wallet header, 9 tiles, try-on / buy / wear |
+| `src/styles.css` | All styling: HUD chips, overlay cards, buttons, shop grid |
+| `src/game/costumes.js` | Costume catalogue + primitive-built outfit builders for the monkey rig |
 | `src/game/engine.js` | `MonkeyGame`: renderer/scene/camera/lights, procedural monkey, physics, spawning, collisions, animation loop |
 | `src/game/track.js` | `TrackPath`: procedurally generated spline (straights, banking curves, hills) sampled every `STEP = 1 m` |
-| `tests/game.spec.js` | Playwright suite + screenshots into `tests/screenshots/` (tracked in git) |
+| `tests/game.spec.js`, `tests/costume-shop.spec.js` | Playwright suites + screenshots into `tests/screenshots/` (tracked in git) |
 | `playwright.config.js` | testDir/timeouts, `baseURL :5173`, viewport 1280×720, headless, `webServer.reuseExistingServer` |
 | `vite.config.js` | React plugin, `server.port 5173` + `strictPort`, `base` from `PAGES_BASE` |
 | `.github/workflows/deploy.yml` | Builds with `PAGES_BASE=/<repo>/` and publishes `dist/` to GitHub Pages |
@@ -49,9 +52,13 @@ monoliths sit flush on the surface; random segment generation truncates before a
 
 ### States — and how React sees them
 `this.state`: `menu` (gentle auto-run past scenery) → `playing` → `crashed` (1.4 s skid +
-tumble, then `over`) → `over` (frozen at the crash site).
+tumble, then `over`) → `over` (frozen at the crash site), plus `shop`, a fitting-room state
+entered from the menu or the game-over card (`enterShop()` is ignored while `playing`).
+Both dispatch chains in `loop()` need explicit branches for every state — their final branch
+is an unguarded `else` that means "over", and the follow-camera block at the end of `loop()`
+is skipped for `shop`, which owns its own close-up framing. See [costume-shop.md](./costume-shop.md).
 
-React has **no** `crashed` phase: `App.jsx` keeps `phase ∈ {menu, playing, over}`, and
+React has **no** `crashed` phase: `App.jsx` keeps `phase ∈ {menu, playing, over, shop}`, and
 because `crash()` invokes `cb.onGameOver(stats)` synchronously, `phase` becomes `'over'`
 the instant the crash happens — so the game-over overlay is displayed *while* the monkey is
 still tumbling for the next 1.4 s (and the HUD stays visible, since `phase !== 'menu'`).
@@ -90,6 +97,11 @@ jumping blends toward a fixed jump pose via `jumpBlend`. The monkey uses exactly
 materials (`brown`, `tan`, `dark`, `white`) that are each reused across many meshes — they
 are shared *between* parts, so recolouring one part would recolour them all. (Scenery is the
 opposite: `buildTree()` allocates fresh trunk/leaf materials per tree.)
+
+Costumes exploit this: every outfit is its own set of meshes/materials attached to the rig
+hosts (`body`, `head`, `armL/R`, `legL/R`) and toggled by visibility, never by recolouring.
+Offsets are authored in pre-scale monkey-local units (`group.scale = 0.85` applies to
+descendants) and nothing is parented to a limb pivot, whose rotation is rewritten each frame.
 
 ### World content
 - **Ground**: ribbon chunks (`CHUNK_LEN = 20 m`) swept along the path from a lateral
@@ -142,6 +154,7 @@ Keyboard input is ignored unless `state === 'playing'`; arrow keys/space are
 
 | Hook | Purpose |
 | ---- | ------- |
+| `getCostume()` / `setCostume(id)` | read/equip an outfit (`null` = bare monkey); also used by tests to assert try-on |
 | `testSpawnBananaAtPlayer()` | deterministic banana pickup (spawns at the monkey's chest) |
 | `testSpawnBoulderAhead(d)` | unavoidable boulder in the player's current lane → natural crash |
 | `testClearCliffs()` | remove cliffs **and** active boulders, set `nextCliffS = Infinity` until the next `reset()`. Does *not* stop wave spawning — see `noWavesUntil` below |
@@ -151,10 +164,14 @@ Keyboard input is ignored unless `state === 'playing'`; arrow keys/space are
 
 - One `<canvas>`; the engine is created once in an effect and stored in a ref
   (`window.__MONKEY_GAME` for tests, removed on unmount).
-- `phase` state selects which overlay renders: `#menu-overlay`, HUD (`phase !== 'menu'`),
-  `#gameover-overlay`.
+- `phase` state selects what renders: `#menu-overlay`, HUD (only for `playing`/`over`),
+  `#gameover-overlay`, `#shop-overlay`.
 - `startGame()` resets HUD/stats, sets `playing`, calls `game.start()`.
-- Persistence: best score under `localStorage['monkey-dash-best']`.
+- `Enter`/`Space` start or restart **except** in the shop; `Esc` closes the shop.
+- Persistence: best score under `localStorage['monkey-dash-best']`; costume shop under
+  `localStorage['monkey-dash-shop']`. Run bananas are banked into the shop wallet exactly once,
+  inside the engine's `onGameOver` callback (never in a render path or effect — returning from
+  the shop restores phase `over` and would re-bank).
 
 ## Build & deploy
 
@@ -172,3 +189,4 @@ boots the dev server via `webServer.reuseExistingServer`.
 | boulder crash | game over overlay, final score > 0, restart resets state |
 | cliff ride | timed jump onto plateau, trail bananas collected, survive; late jump crashes (clip regression) |
 | keyboard-only flow | `Enter` starts the game |
+| costume shop (`costume-shop.spec.js`) | banking on death, try-on is free/reversible, buy + price inflation, no overspending, persistence across reload, menu entry/back, every outfit renders |
