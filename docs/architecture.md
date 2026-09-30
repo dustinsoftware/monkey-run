@@ -118,15 +118,19 @@ descendants) and nothing is parented to a limb pivot, whose rotation is rewritte
   1.2 in `y` of the monkey's chest (`py + 0.8`).
 - **Giant cliffs** (`CLIFF_H = 1.9 m`): monolith boxes covering 1–3 lanes, scheduled every
   180–320 m after the first at ~300 m. A lure banana marks the take-off spot and a trail runs
-  along the top. Three separate rules govern contact:
-  - **Airborne landing**: while `!grounded`, land (snap to height, `vy = 0`) whenever
-    `py <= groundHeightAt(s, x)` — there is no tolerance band, which is what stops ghosting
-    through the slab on the way up.
+  along the top. Contact is decided from the height he had **at the start of the frame**
+  (`pyStart`), because physics and collision checks run in one pass:
+  - **Airborne landing**: while `!grounded`, land (snap to height, `vy = 0`) when
+    `py <= groundHeightAt(s, x)` *and* `pyStart >= that height`. The second condition is what
+    stops a late jump ghosting through a cliff face: without it the snap lifts him from below
+    the lip onto the top of the slab in one frame.
+  - **Airborne wall hit**: if instead `pyStart < gh − 0.35` he entered a taller surface from
+    below or sideways → crash.
   - **Grounded step/crash**: if the surface is more than `0.45 m` above `py`, crash (walked
     into a cliff face or lane-changed into its side); within `0.45 m`, stick to it; lower,
     become airborne and fall off the end.
   - **Front-face hit**: crossing `sStart` between frames inside the slab's lateral extent at
-    `py < c.H − 0.35` crashes.
+    `py < c.H − 0.35` crashes (kept for crossings that happen while grounded).
 - **Boulder collision**: `|dx| < r + 0.42 && |ds| < r + 0.35 && py < height − 0.4`.
 
 ### Camera & lighting

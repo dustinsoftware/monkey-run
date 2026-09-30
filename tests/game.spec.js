@@ -147,23 +147,33 @@ test('jump onto a giant cliff, ride the banana trail, survive', async ({ page })
   await expect(page.locator('.hud-score')).toBeVisible();
 
   // REGRESSION (clipping bug): jump TOO LATE so the monkey meets the cliff
-  // face at chest height while still rising. Old code ghosted through the
-  // slab; now it must crash into the wall instead.
-  await page.evaluate(() => {
+  // face while still rising. Old code ghosted through the slab; now it must
+  // crash into the wall instead.
+  //
+  // Both the setup and the jump are driven from inside the page: after the ride
+  // he is still airborne (a jump cannot start, and an airborne crossing can land
+  // him on top of the cliff), and Playwright's key-press latency moves the take-off
+  // point by a metre at speed. Either way the outcome becomes a coin flip.
+  await page.waitForFunction(() => {
+    const g = window.__MONKEY_GAME;
+    return g.grounded && Math.abs(g.py) < 0.05; // settled back onto the road
+  }, null, { timeout: 20_000 });
+
+  const lateCliff = await page.evaluate(() => {
     const g = window.__MONKEY_GAME;
     g.testClearCliffs();
     return g.testSpawnCliffAhead();
-  }).then((c) => {
-    return page.waitForFunction(
-      ({ sStart }) => {
-        const g = window.__MONKEY_GAME;
-        return g.s >= sStart - g.speed * 0.13; // deliberately late jump
-      },
-      c,
-      { timeout: 20_000 }
-    );
   });
-  await page.keyboard.press('Space');
+  await page.waitForFunction(
+    ({ sStart }) => {
+      const g = window.__MONKEY_GAME;
+      if (g.s < sStart - g.speed * 0.04 || !g.grounded) return false;
+      g.jump(); // as late as it can be and still leave him rising at the wall
+      return true;
+    },
+    lateCliff,
+    { timeout: 20_000 }
+  );
   await expect(page.locator('#gameover-overlay')).toBeVisible({ timeout: 8000 });
   await shot(page, '09-cliff-clip-crash');
   assertNoErrors();

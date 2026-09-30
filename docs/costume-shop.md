@@ -1,6 +1,6 @@
 # Design — Costume Shop
 
-**Status:** reviewed design (reviewer run `e62342aa`), ready for implementation.
+**Status:** implemented (design from reviewer run `e62342aa`; deviations recorded at the bottom).
 **Scope:** spend bananas banked from runs on permanent monkey outfits, with try-on preview.
 Base price 1000, +200 inflation after every purchase.
 
@@ -79,7 +79,7 @@ shop restores phase `'over'` while `finalStats` is still set) — forbidden.
 | `src/game/costumes.js` *(new)* | `COSTUMES` catalogue + `buildCostume(id, hosts)` → `{ host, object }[]` |
 | `src/shop/store.js` *(new)* | observable store above; exposes `window.__MONKEY_SHOP` |
 | `src/shop/CostumeShop.jsx` *(new)* | shop overlay UI |
-| `src/game/engine.js` | `'shop'` state, fitting camera, costume rig + API, test hooks, pose/dispose fixes |
+| `src/game/engine.js` | `'shop'` state, fitting camera, costume rig + API, pose/dispose fixes |
 | `src/App.jsx` | phase `'shop'`, HUD gating, banking in `onGameOver`, entry buttons, apply worn at boot |
 | `src/styles.css` | shop panel/grid/tile styles |
 | `tests/costume-shop.spec.js` *(new)* | Playwright coverage + per-costume screenshots |
@@ -107,13 +107,13 @@ costumes are built lazily on first use and cached for the session.
 | ------- | ------------ | ----- |
 | `tuxedo` | black jacket shell + white shirt front + bow tie; black arm sleeves + trouser leg sleeves (own meshes over the limbs) | body, armL/R, legL/R |
 | `clown` | pink onesie shell with dot spheres, magenta ruffle collar; red nose; baggy shoe boxes | body, head, legL/R |
-| `doctor` | white coat shell + sleeves, stethoscope (neck torus, tubes, chest disc), red-cross armband, head-mirror cap | body, armL, head |
+| `doctor` | white coat shell + sleeves, stethoscope (neck torus, tube, chest disc), red-cross armband, head-mirror cap | body, armL/R, head |
 | `tophat` | crown cylinder + brim disc + band | head |
 | `dog` | floppy ears, darker snout patch, red collar with gold tag | head, body |
 | `bunny` | two long ears + pink inner ears, buck tooth; cotton tail | head, body |
 | `cat` | cone ears, whisker cylinders; collar bell | head, body |
-| `butterfly` | four translucent wing panels (back) | body |
-| `rainsuit` | yellow coat shell + sleeves + hood cap and brim, yellow boots; closed umbrella over the shoulder | body, legL/R |
+| `butterfly` | four translucent wing panels on the back (kept near-vertical: a flat horizontal wing is an invisible sliver at chest-height camera), antennae with ball tips | body, head |
+| `rainsuit` | yellow coat shell + sleeves + hood cap and brim, wellies; closed umbrella over the shoulder | body, armL/R, legL/R |
 
 ### `'shop'` is a real fifth engine state
 `this.state`: `menu | playing | crashed | over | shop`. Both dispatch chains in `loop()` end in
@@ -131,15 +131,18 @@ The **follow-camera block runs unconditionally today** (position lerp, `_camUp` 
 `lookAt`) and would overwrite any fitting pose in the same frame — so it is gated behind
 `state !== 'shop'`, and `'shop'` computes its own close-up three-quarter view using **dedicated
 scratch vectors** (`_P/_T/_U/_Rv/_tmp` are clobbered by the sun/valley code earlier in the loop).
-The fitting camera sits ahead along the path tangent, offset laterally, aimed at chest height with
-a downward bias so the monkey lands in the upper half of the frame (the shop panel is a bottom sheet).
+The fitting camera sits ahead along the path tangent (he faces `+tangent`), offset laterally and
+aimed low. **Because it looks back along the path, screen-right is negative lateral** — aiming
+"left of him" in path terms parks him behind the shop panel; the first cut did exactly that.
 
 - `enterShop()` — **ignored while `state === 'playing'`** (otherwise a hook call would freeze a run
   with no overlay to escape from); snaps the monkey upright (`body.rotation`, `body.position.y`,
   head/tail/limb rotations zeroed, `py` to surface height), sets `state = 'shop'`.
 - `exitShop({ toMenu })` — `toMenu: true` → `reset(true)` (menu auto-run); otherwise `state = 'over'`
   upright and frozen. Entering from `'crashed'` simply cancels the tumble timer.
-- `setCostume(id)` / `getCostume()` — equip/preview; `null` = bare monkey.
+- `setCostume(id)` / `getCostume()` — equip/preview; `null` = bare monkey. The idle turn
+  **oscillates** (`sin(t * 0.35) * 0.5`) rather than spinning continuously, so the preview always
+  faces roughly toward the camera instead of showing his back half the time.
 
 ## React integration
 
@@ -153,15 +156,20 @@ a downward bias so the monkey lands in the upper half of the frame (the shop pan
 
 ## Shop UI contract
 
-Bottom-sheet panel (`#shop-overlay`, `.card-shop`) sized to fit the fixed 1280×720 test viewport —
-`html/body/#root` are `overflow: hidden`, so anything past the fold is unclickable. Header shows
-`BANANA BUCKS` (`#shop-wallet`) and the current price (`#shop-price`); a compact 3-column grid of
-9 `.costume-card`s (each `[data-costume="<id>"]`) inside a region capped by `max-height` with its own
-scroll; footer has `#shop-back-btn` plus a hint that try-on is free.
+Left-hand panel (`#shop-overlay`, `.card-shop`) rather than a bottom sheet, so the fitting camera
+can frame the monkey in the clear space on the right. It is sized to fit the fixed 1280×720 test
+viewport **without scrolling**: `html/body/#root` are `overflow: hidden`, and Playwright's implicit
+scroll-into-view silently clips cards below the fold (the grid keeps `overflow-y: auto` as a
+fallback for smaller screens). Header shows banana bucks (`#shop-wallet`) and the current price
+(`#shop-price`).
 
-Per card, exactly: name, `.costume-price`, optional `.owned-badge`, one `.try-btn` ("TRY ON"), and
-one state button — unowned: `.buy-btn` ("BUY & WEAR", `disabled` while the wallet cannot pay);
-owned: `.wear-btn` ("WEAR", or "WORN" and disabled for the currently worn id).
+A 3-column grid holds the nine `.costume-card`s (`[data-costume="<id>"]`, plus `.owned` when
+unlocked). Per card: icon, name, `.owned-badge` (unlocked), `.worn-badge` (currently worn),
+`.costume-price` — **rendered only on locked cards**, so price assertions never meet a stale label —
+and a `.card-actions` row with one `.try-btn` ("TRY ON", "TRYING" while previewed) plus exactly one
+state button: unowned `.buy-btn` ("BUY & WEAR", `disabled` while the wallet cannot pay), owned
+`.wear-btn` ("WEAR", or "WORN" and disabled for the worn id). Footer: `#shop-back-btn` and a hint
+that try-on is free.
 
 ## Tests (`tests/costume-shop.spec.js`)
 
@@ -170,19 +178,17 @@ test seeds its own wallet through `window.__MONKEY_SHOP`, and persistence is ass
 across `reload()`. Engine hooks are engine-side only — overlays render from React `phase`, so UI
 assertions must go through real clicks (`#menu-shop-btn` etc.).
 
-1. **death offers the shop** — collect a banana deterministically with
-   `testSpawnBananaAtPlayer()` *before* the crash (a boulder spawned 1.5 s into a run would bank 0),
-   then crash; assert the card reports the banked count and `__MONKEY_SHOP.getState().wallet` grew by it.
-2. **shop opens from game over** — click `#go-shop-btn`; `#shop-overlay` shows, `.costume-card` count is 9, every `.costume-price` reads 1000.
-3. **try-on is free and reversible** — empty wallet; click `TRY ON` on `tuxedo`; assert
-   `__MONKEY_GAME.getCostume() === 'tuxedo'` while store `owned`/`wallet` are untouched; leave the shop and assert it reverted.
-4. **buy + inflation** — seed 5000 bananas; buy `tuxedo` (wallet 4000, owned forever), every card then reads 1200; a second purchase costs 1200 and pushes prices to 1400.
-5. **cannot overspend** — with an empty wallet `.buy-btn` is `toBeDisabled()` (never click it).
-6. **persistence** — after `reload()`, wallet/owned/purchases/worn are restored and the engine boots already wearing the saved costume.
-7. **menu entry / back** — shop opens from the menu, `#shop-back-btn` returns to `#menu-overlay`.
-8. **every outfit renders** — one test per id (`test.step` or separate tests; a 90 s timeout will not
-   host nine WebGL previews plus screenshots): enter via `#menu-shop-btn`, click that card's `TRY ON`,
-   let frames render, assert no page errors, screenshot `tests/screenshots/10-costume-<id>.png`.
+| Test | Asserts |
+| ---- | ------- |
+| death banks bananas and offers the shop | bananas collected with `testSpawnBananaAtPlayer()` *before* the crash (a boulder spawned 1.5 s into a run would bank 0) appear as `+N` on the card and in the wallet; leaving the shop does **not** re-bank |
+| shop opens from game over | `#go-shop-btn` → `#shop-overlay`, nine cards, header price 1000, every locked card priced 1000 |
+| trying on is free and reversible | `TRY ON tuxedo` changes `getCostume()` while wallet/owned/purchases/worn stay untouched; leaving drops the preview |
+| buying unlocks forever and raises every price by 200 | buy at 1000 → wallet −1000, card shows OWNED + WORN, worn card's WEAR is disabled, other prices become 1200; second purchase costs 1200 and pushes prices to 1400; wearing an owned outfit is free; re-buying an owned id returns `false` without charging or inflating |
+| you cannot spend bananas you do not have | nine `.buy-btn`s, disabled on an empty wallet (`toBeDisabled`, never clicked); `buy()` returns `false` and changes nothing |
+| persistence across reload | wallet/owned/purchases/worn restored from storage; the saved outfit is worn at boot |
+| corrupt storage falls back to defaults | unparsable JSON normalises; negative numbers, unknown ids, an unowned `worn` and a hand-edited `price` field are all ignored; an owned `worn` is applied at boot |
+| shop never restarts a run | Space in the shop changes neither React phase nor engine state; Esc closes it |
+| every outfit renders (one test per id) | click that card's `TRY ON`, assert `getCostume()`, let the fitting camera glide in, screenshot `tests/screenshots/12-costume-<id>.png`, no page errors |
 
 Existing tests must keep passing; the game-over card keeps `#restart-btn` and its behaviour.
 
@@ -192,6 +198,18 @@ Nine costumes at 1000 → 2600 sum to **16,200 bananas**, while a run typically 
 low tens — the first outfit is worth of tens of runs. That matches the requested economy; if playtest
 says it is too grindy, the knobs are the base price, the +200 step, or bonus income (e.g. cliff-trail
 multipliers). Tests never depend on grinding: they seed the wallet through `__MONKEY_SHOP`.
+
+## Implementation notes (what differed from the design)
+
+- **Panel side, not bottom sheet.** The fitting camera frames the monkey beside a left-hand panel.
+- **No new engine test hooks.** `enterShop`/`exitShop` are app APIs; tests drive the UI with clicks,
+  because overlays render from React `phase` and an engine-only call would move the camera behind a
+  closed shop. `getCostume()` is the only accessor tests need.
+- **Price label only on locked cards**, so "every costume costs N" assertions don't hit a worn card.
+- The regression test in `tests/game.spec.js` caught a genuine ghosting bug: the landing snap raised
+  him onto the top of a cliff *before* the face-crossing crash check read his height, so a late jump
+  could pass through the slab. Contact is now decided from `pyStart` (height at frame start) — see
+  the contact rules in [architecture.md](./architecture.md).
 
 ## Review checklist (before implementing)
 

@@ -133,6 +133,132 @@ kbd {
 
 .best { margin-top: 16px; color: #8a5a20; font-weight: 700; }
 
+.menu-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btn-alt {
+  background: linear-gradient(#8b6ff0, #5a3fd0);
+  border-color: #33207a;
+  box-shadow: 0 6px 0 #33207a, 0 12px 20px rgba(0, 0, 0, .3);
+}
+
+.btn-tiny {
+  font-size: 11px;
+  padding: 4px 7px;
+  letter-spacing: .5px;
+  box-shadow: 0 3px 0 #2f6b0f, 0 6px 10px rgba(0, 0, 0, .25);
+}
+
+.btn-tiny:disabled {
+  filter: grayscale(.7) brightness(.85);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.wallet, .banked {
+  margin-top: 14px;
+  color: #6b4a20;
+  font-weight: 800;
+}
+
+/* --------------------------- Costume shop ------------------------------- */
+/* Left-hand panel so the fitting camera can frame the monkey on the right.   */
+.overlay-shop {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 16px;
+}
+
+.card-shop {
+  width: min(600px, 52vw);
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px;
+}
+
+.shop-head { text-align: left; }
+.title-shop { font-size: 24px; }
+
+.shop-balances {
+  display: flex;
+  gap: 14px;
+  margin-top: 5px;
+}
+
+.shop-balance {
+  flex: 1;
+  background: #fff3d4;
+  border: 2px solid #d8b070;
+  border-radius: 12px;
+  padding: 3px 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.shop-balance .stat-value { font-size: 22px; }
+
+.costume-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.costume-card {
+  background: #fff3d4;
+  border: 2px solid #d8b070;
+  border-radius: 14px;
+  padding: 5px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.costume-card.owned {
+  background: #eaf7d6;
+  border-color: #7fbf4a;
+}
+
+.costume-icon { font-size: 22px; line-height: 1.1; }
+.costume-name { font-size: 12px; font-weight: 900; color: #5b3c16; text-align: center; line-height: 1.15; }
+.costume-price { font-size: 13px; font-weight: 900; color: #8a5a20; }
+
+.owned-badge, .worn-badge {
+  font-size: 10px;
+  letter-spacing: 1px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #4ea51e;
+  color: #fff;
+}
+
+.worn-badge { background: #5a3fd0; }
+
+.card-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.shop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hint { font-size: 11px; color: #8a6b3a; font-weight: 700; text-align: left; max-width: 240px; }
+
 .stats {
   display: flex;
   gap: 26px;

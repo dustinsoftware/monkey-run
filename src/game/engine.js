@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TrackPath, STEP } from './track.js';
+import { buildCostume } from './costumes.js';
 
 // ---------------------------------------------------------------------------
 // Tuning constants
@@ -150,7 +151,7 @@ export class MonkeyGame {
   constructor(canvas, callbacks = {}) {
     this.canvas = canvas;
     this.cb = callbacks; // { onHud, onGameOver }
-    this.state = 'menu';   // menu | playing | crashed | over
+    this.state = 'menu';   // menu | playing | crashed | over | shop
     this.raf = null;
     this.onKeyDown = this.onKeyDown.bind(this);
     this.onResize = this.onResize.bind(this);
@@ -164,6 +165,19 @@ export class MonkeyGame {
     this._camUp = new THREE.Vector3(0, 1, 0);
     this._basisQ = new THREE.Quaternion();
     this._mat4 = new THREE.Matrix4();
+    // the fitting-room camera needs its own scratch space: _P/_T/_U/_Rv/_tmp are
+    // clobbered by the sun/valley block and the follow-camera earlier in loop()
+    this._fitP = new THREE.Vector3();
+    this._fitT = new THREE.Vector3();
+    this._fitU = new THREE.Vector3();
+    this._fitR = new THREE.Vector3();
+    this._camTarget = new THREE.Vector3();
+    this._lookAt = new THREE.Vector3();
+
+    // costumes: id -> [{host, object}], built lazily and toggled by visibility
+    this.costumeId = null;
+    this.costumeParts = new Map();
+    this.shopT = 0;
 
     this.init();
   }
@@ -310,12 +324,8 @@ export class MonkeyGame {
     for (const c of this.cliffs) { this.scene.remove(c.group); disposeGroup(c.group); }
     this.cliffs.length = 0;
 
-    const k = this.monkey;
-    k.body.position.set(0, 0, 0);
-    k.body.rotation.set(0, 0, 0);
-    for (const part of [k.armL, k.armR, k.legL, k.legR]) part.rotation.set(0, 0, 0);
-    const m = this.monkey.group;
-    m.rotation.set(0, 0, 0);
+    this.snapMonkeyUpright(); // also clears head/tail rotations (stale pose leak)
+    this.monkey.group.rotation.set(0, 0, 0);
 
     // rebuild ground chunks and scenery around the fresh path
     for (const [, mesh] of this.chunks) { this.scene.remove(mesh); mesh.geometry.dispose(); }
@@ -338,6 +348,89 @@ export class MonkeyGame {
     this.crashTimer = 0;
     const stats = this.stats();
     if (this.cb.onGameOver) this.cb.onGameOver(stats);
+  }
+
+  // --- costumes -------------------------------------------------------------
+  /** The rig hosts a costume may attach to. */
+  costumeHosts() {
+    const k = this.monkey;
+    return { body: k.body, head: k.head, armL: k.armL, armR: k.armR, legL: k.legL, legR: k.legR };
+  }
+
+  ensureCostume(id) {
+    if (!id || !this.costumeParts.has(id)) return;
+    const hosts = this.costumeHosts();
+    for (const p of this.costumeParts.get(id)) {
+      p.object.visible = false;
+      hosts[p.host].add(p.object);
+    }
+  }
+
+  /** Equip an outfit ('' / null = bare monkey). Builds it on first use. */
+  setCostume(id) {
+    const next = id || null;
+    if (next && !this.costumeParts.has(next)) {
+      const hosts = this.costumeHosts();
+      const parts = buildCostume(next, hosts);
+      for (const p of parts) hosts[p.host].add(p.object);
+      this.costumeParts.set(next, parts);
+    }
+    for (const [cid, parts] of this.costumeParts) {
+      const on = cid === next;
+      for (const p of parts) p.object.visible = on;
+    }
+    this.costumeId = next;
+  }
+
+  getCostume() { return this.costumeId; }
+
+  /** Upright, limbs at rest — used by reset(), the shop and the over state. */
+  snapMonkeyUpright() {
+    const k = this.monkey;
+    k.body.position.set(0, 0, 0);
+    k.body.rotation.set(0, 0, 0);
+    k.head.rotation.set(0, 0, 0); // reset() never restored these → stale poses leaked
+    k.tail.rotation.set(0, 0, 0);
+    for (const part of [k.armL, k.armR, k.legL, k.legR]) part.rotation.set(0, 0, 0);
+  }
+
+  // --- fitting room ---------------------------------------------------------
+  /** @returns false when refused (never freeze a live run from a hook) */
+  enterShop() {
+    if (this.state === 'playing') return false;
+    this.snapMonkeyUpright();
+    this.py = this.groundHeightAt(this.s, this.x);
+    this.vy = 0;
+    this.grounded = true;
+    this.shopT = 0;
+    this.state = 'shop';
+    return true;
+  }
+
+  exitShop({ toMenu = false } = {}) {
+    this.snapMonkeyUpright();
+    this._camUp.set(0, 1, 0);
+    if (toMenu) { this.reset(true); return; }
+    this.state = 'over';
+  }
+
+  /** Close-up three-quarter view of the monkey, biased so he sits above the shop panel. */
+  updateShopCamera(dt) {
+    this.path.sampleTo(this.s, this._fitP, this._fitT, this._fitU);
+    this._fitR.crossVectors(this._fitT, this._fitU).normalize();
+    const camPos = this._camTarget.copy(this._fitP)
+      .addScaledVector(this._fitT, 3.0)   // in front of him (he faces along +tangent)
+      .addScaledVector(this._fitR, this.x + 1.2)
+      .addScaledVector(this._fitU, 1.35);
+    this.camera.position.lerp(camPos, clamp(dt * 4, 0, 1));
+    this._camUp.lerp(this._fitU, clamp(dt * 4, 0, 1)).normalize();
+    this.camera.up.copy(this._camUp);
+    // The camera looks back along the path, so screen-right is *negative*
+    // lateral: aim wide of him (and low) to park him right and clear of the panel.
+    const look = this._lookAt.copy(this._fitP)
+      .addScaledVector(this._fitR, this.x + 0.95)
+      .addScaledVector(this._fitU, 1.35);
+    this.camera.lookAt(look);
   }
 
   // --- test/debug hooks -----------------------------------------------------
@@ -760,6 +853,8 @@ export class MonkeyGame {
       if (this.crashTimer > 1.4) this.state = 'over';
     } else if (this.state === 'menu') {
       worldSpeed = 2.5; // menu: gentle auto-run past the scenery
+    } else if (this.state === 'shop') {
+      worldSpeed = 0;   // shop: fitting room, no travel
     } else {
       worldSpeed = 0;   // over: frozen at the crash site
     }
@@ -789,14 +884,21 @@ export class MonkeyGame {
       this.x = lerp(this.x, targetX, clamp(LANE_LERP * dt, 0, 1));
       const xVel = (this.x - prevX) / Math.max(dt, 1e-4);
 
-      // jump physics vs. surface/cliff height
+      // jump physics vs. surface/cliff height. `pyStart` is his height at the top of
+      // the frame: collisions are decided against it, because the landing snap below
+      // would otherwise move him onto the slab before anything can notice the hit.
+      const pyStart = this.py;
       const gh = this.groundHeightAt(this.s, this.x);
       if (!this.grounded) {
         this.vy += GRAVITY * dt;
         this.py += this.vy * dt;
-        // Land whenever at/below the surface height — no vy<=0 requirement,
-        // otherwise a rising jump ghosts through the slab and snaps out late.
-        if (this.py <= gh) { this.py = gh; this.vy = 0; this.grounded = true; }
+        // Land only on a surface he was already above when the frame began. Without
+        // that test a late jump slips through the cliff face and snaps onto its top.
+        if (this.py <= gh && pyStart >= gh) {
+          this.py = gh; this.vy = 0; this.grounded = true;
+        } else if (pyStart < gh - 0.35) {
+          this.crash(); // entered a taller surface from below or sideways
+        }
       } else {
         if (gh - this.py > 0.45) {
           this.crash(); // walked/lane-changed into the side of a cliff
@@ -821,7 +923,7 @@ export class MonkeyGame {
       // cliff face crash: entered a cliff from the front while too low
       for (const c of this.cliffs) {
         if (prevS < c.sStart && this.s >= c.sStart &&
-            Math.abs(this.x - c.x) <= c.halfW + 0.35 && this.py < c.H - 0.35) {
+            Math.abs(this.x - c.x) <= c.halfW + 0.35 && pyStart < c.H - 0.35) {
           this.crash();
         }
       }
@@ -897,7 +999,29 @@ export class MonkeyGame {
       k.armR.rotation.x = lerp(k.armR.rotation.x, -2.4, dt * 8);
       k.legL.rotation.x = Math.sin(this.runPhase * 6) * 0.3;
       k.legR.rotation.x = -Math.sin(this.runPhase * 6) * 0.3;
-    } else {
+    } else if (this.state === 'shop') {
+      // fitting room: happy idle pose, turning slowly so the outfit shows from all sides
+      this.shopT += dt;
+      const t = this.shopT;
+      k.armL.rotation.z = 0.55 + Math.sin(t * 2) * 0.12;
+      k.armR.rotation.z = -0.55 - Math.sin(t * 2) * 0.12;
+      k.armL.rotation.x = lerp(k.armL.rotation.x, -0.35, clamp(dt * 6, 0, 1));
+      k.armR.rotation.x = lerp(k.armR.rotation.x, -0.35, clamp(dt * 6, 0, 1));
+      k.legL.rotation.z = 0.14;
+      k.legR.rotation.z = -0.14;
+      k.head.rotation.y = Math.sin(t * 0.7) * 0.2;
+      k.tail.rotation.y = Math.sin(t * 1.2) * 0.3;
+
+      const bobFit = Math.abs(Math.sin(t * 1.6)) * 0.05;
+      this._Rv.crossVectors(this._T, this._U).normalize();
+      m.position.copy(this._P)
+        .addScaledVector(this._Rv, this.x)
+        .addScaledVector(this._U, this.py + bobFit);
+      this._mat4.makeBasis(this._Rv, this._U, this._tmp.copy(this._T).negate());
+      m.quaternion.setFromRotationMatrix(this._mat4);
+      // oscillate instead of spinning: always roughly facing the fitting camera
+      k.body.rotation.y = Math.sin(t * 0.35) * 0.5;
+    } else if (this.state === 'over') {
       // over: unwind the tumble to the nearest full rotation so he lands upright
       k.body.position.y = lerp(k.body.position.y, 0, clamp(dt * 5, 0, 1));
       const twoPi = Math.PI * 2;
@@ -921,6 +1045,14 @@ export class MonkeyGame {
     // recycle scenery that fell behind
     for (const item of this.scenery) {
       if (item.s < this.s - 50 || item.s > this.s + GEN_AHEAD + 40) this.placeScenery(item);
+    }
+
+    if (this.state === 'shop') {
+      // the follow-camera below runs for every other state and would overwrite
+      // the fitting framing within the same frame
+      this.updateShopCamera(dt);
+      this.renderer.render(this.scene, this.camera);
+      return;
     }
 
     // camera: rides the path frame so banking/curves tilt the view, Sonic-style
@@ -952,6 +1084,16 @@ export class MonkeyGame {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('resize', this.onResize);
     for (const [, mesh] of this.chunks) { this.scene.remove(mesh); mesh.geometry.dispose(); }
+    for (const [, parts] of this.costumeParts) {
+      for (const p of parts) {
+        p.object.traverse((o) => {
+          if (!o.isMesh) return;
+          o.geometry?.dispose();
+          o.material?.dispose(); // costume materials are never shared with the monkey
+        });
+      }
+    }
+    this.costumeParts.clear();
     this.renderer.dispose();
   }
 }
