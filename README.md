@@ -22,7 +22,8 @@ pnpm start      # or pnpm dev — same thing, http://localhost:5173
 | Esc            | leave the costume shop |
 
 Touch: swipe left/right to change lanes, tap to jump. Keys do nothing while the costume shop is
-open, so browsing never starts a run.
+open, so browsing never starts a run. While the **top banana** modal is up, Enter/Space/Esc dismiss
+it instead.
 
 ## Gameplay
 
@@ -37,16 +38,20 @@ open, so browsing never starts a run.
 - Speed ramps up with distance; score = meters + 10 per banana; best score saved to `localStorage`
 - **Costume shop**: bananas you collect are banked into a persistent wallet, and every death offers
   the shop. Nine outfits (tuxedo, clown, doctor, top hat, dog, bunny, cat, butterfly wings, yellow
-  rainsuit + umbrella) cost **1000** bananas; after any purchase *every* costume becomes **200**
-  pricier. Unlocks are forever, and `TRY ON` previews an outfit on the monkey in a fitting camera
-  before you spend anything — see [docs/costume-shop.md](docs/costume-shop.md)
+  rainsuit + umbrella) cost **100 bananas each — flat, forever, no inflation**. Unlocks are forever,
+  and `TRY ON` previews an outfit on the monkey in a fitting camera before you spend anything. The
+  shop always sets him back down at the start of the trail so you can actually see him. Own all
+  nine and the game tells you: *"You beat the game! You're the top banana! … -The Masters"* — see
+  [docs/costume-shop.md](docs/costume-shop.md)
 
 ## Architecture
 
 - `src/game/engine.js` — the whole Three.js game: scene, procedural low-poly monkey (capsules/spheres/tube tail) with a hand-rolled run cycle & jump pose, physics, spawning, collision
 - `src/game/costumes.js` — the nine outfits, also built from primitives and pinned to rig hosts (`body`, `head`, limb pivots)
-- `src/shop/store.js` — observable banana-bucks store (wallet, unlocks, purchase count → price, worn outfit), persisted to `localStorage`
+- `src/game/banana.js` — the collectible banana mesh itself: one lathed, bent, tapered, vertex-coloured banana shared by the whole pool
+- `src/shop/store.js` — observable banana-bucks store (wallet, unlocks, flat 100-banana price, worn outfit, pending victory), persisted to `localStorage`
 - `src/shop/CostumeShop.jsx` — the shop panel: try-on / buy / wear
+- `src/shop/VictoryModal.jsx` — the top-banana modal shown when the wardrobe is complete
 - `src/App.jsx` — React shell: menu / HUD / game-over / shop overlays, best-score persistence and banana banking; talks to the engine via callbacks
 
 ## Tests
@@ -68,8 +73,11 @@ Screenshots land in `tests/screenshots/`:
 | `08-keyboard-start.png` | Enter starts the game |
 | `09-cliff-clip-crash.png` | too-late jump crashes into the cliff face (no ghosting) |
 | `10-gameover-banked.png` | game over after banking bananas and visiting the shop |
-| `11-shop-two-unlocked.png` | shop with two costumes unlocked at the inflated price |
+| `11-shop-two-unlocked.png` | shop with two costumes unlocked (price still 100) |
+| `13-top-banana.png` | the whole wardrobe owned → top banana modal |
 | `12-costume-<id>.png` | one fitting-room preview per outfit (nine files) |
+| `14-banana-row.png` | a row of actual bananas (not macaroni) down the trail |
+| `15-framed-at-trailhead.png` | back from the shop: he stands, framed, at the start of the trail |
 
 The suite verifies: menu renders, score increases while running on the curved track,
 banana pickup works (deterministic injection), a real boulder collision ends the run,
@@ -77,7 +85,8 @@ a full **cliff ride** (timed jump onto the plateau, collect trail bananas, survi
 fall off the end) succeeds and a too-late jump crashes instead of clipping through,
 restart resets state, and no page errors occur.
 
-The costume-shop suite covers: bananas banked exactly once per death, try-on free and
-reversible, buying unlocks forever while every price rises by 200, you cannot overspend,
-everything survives a reload, corrupt storage falls back to defaults, the shop never
-restarts a run (Space/Esc), and each of the nine outfits renders.
+The costume-shop suite covers: bananas banked exactly once per death, the shop rewinding the monkey
+to the start of the trail, try-on free and reversible, flat 100-banana buys that never inflate, the
+top-banana modal firing on the last unlock (and surviving a reload until dismissed), you cannot
+overspend, everything survives a reload, corrupt storage falls back to defaults, bananas are shaped
+like bananas, the shop never restarts a run (Space/Esc), and each of the nine outfits renders.

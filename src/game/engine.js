@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TrackPath, STEP } from './track.js';
 import { buildCostume } from './costumes.js';
+import { makeBananaGeometry } from './banana.js';
 
 // ---------------------------------------------------------------------------
 // Tuning constants
@@ -17,6 +18,8 @@ const GEN_AHEAD = 200;         // path/geometry generated this far ahead
 const DESPAWN_BEHIND = 26;     // recycle objects this far behind the player
 const CHUNK_LEN = 20;          // meters per road-ribbon chunk
 const CLIFF_H = 1.9;           // height of cliff platforms (jumpable: apex 2.4)
+const CAM_BEHIND = 9;          // chase camera sits this far behind the player
+const CAM_HEIGHT = 3.5;        // …and this far above the path surface
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -217,8 +220,10 @@ export class MonkeyGame {
     this.boulderGeo = new THREE.DodecahedronGeometry(1, 0);
     this.rockMat = new THREE.MeshStandardMaterial({ color: 0x8f8577, roughness: 0.9, flatShading: true });
     this.cliffMat = new THREE.MeshStandardMaterial({ color: 0x6e6257, roughness: 1, flatShading: true });
-    this.bananaGeo = new THREE.TorusGeometry(0.26, 0.1, 8, 14, Math.PI * 0.8);
-    this.bananaMat = new THREE.MeshStandardMaterial({ color: 0xffd335, roughness: 0.5 });
+    // Real bananas (tapered crescents with brown tips), coloured per vertex so
+    // the whole pool can share one geometry + material.
+    this.bananaGeo = makeBananaGeometry();
+    this.bananaMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45 });
 
     // deep valley floor: fills the sky below the ribbon so distant terrain
     // never looks like floating paper when viewed from atop a cliff
@@ -299,11 +304,7 @@ export class MonkeyGame {
   // -------------------------------------------------------------------------
   reset(initial = false) {
     this.state = initial ? 'menu' : 'playing';
-    this.path = new TrackPath(); // fresh curves every run
 
-    this.s = 0;                  // distance along the path
-    this.laneIndex = 1;
-    this.x = 0;                  // lateral offset
     this.py = 0;                 // height above surface
     this.vy = 0;
     this.grounded = true;
@@ -319,13 +320,32 @@ export class MonkeyGame {
     this.nextCliffS = 300;       // first cliff around ~300 m in
     this.noWavesUntil = 0;
 
+    this.rebuildWorld();         // fresh curves + chunks + scenery at s = 0
+    this.snapMonkeyUpright(); // also clears head/tail rotations (stale pose leak)
+    this.monkey.group.rotation.set(0, 0, 0);
+    this.snapCameraToStart();
+    this.emitHud(true);
+  }
+
+  /**
+   * Put the world back at the start of the trail: a brand-new path, regenerated
+   * ground chunks, re-seeded scenery and every pooled object deactivated. The new
+   * TrackPath is required — samples behind the player are pruned, so merely
+   * setting `s = 0` would extrapolate past whatever survived instead of putting
+   * him back on the trailhead he started from. Touches no run stats, which is what
+   * lets `enterShop()` call it while a game-over card is open.
+   */
+  rebuildWorld() {
+    this.path = new TrackPath(); // fresh curves every build
+
+    this.s = 0;                  // distance along the path
+    this.laneIndex = 1;
+    this.x = 0;                  // lateral offset
+
     for (const o of this.obstacles) { o.active = false; o.mesh.visible = false; }
     for (const b of this.bananas) { b.group.visible = false; b.active = false; }
     for (const c of this.cliffs) { this.scene.remove(c.group); disposeGroup(c.group); }
     this.cliffs.length = 0;
-
-    this.snapMonkeyUpright(); // also clears head/tail rotations (stale pose leak)
-    this.monkey.group.rotation.set(0, 0, 0);
 
     // rebuild ground chunks and scenery around the fresh path
     for (const [, mesh] of this.chunks) { this.scene.remove(mesh); mesh.geometry.dispose(); }
@@ -334,11 +354,13 @@ export class MonkeyGame {
 
     this.ensureChunks();
     this.syncWorldTransforms();
-    // snap camera behind the start
-    this.path.sampleTo(-9, this._P, this._T, this._U);
-    this.camera.position.copy(this._P).addScaledVector(this._U, 3.5);
+  }
+
+  /** Park the camera where the chase view belongs at s = 0 (behind the start). */
+  snapCameraToStart() {
+    this.path.sampleTo(-CAM_BEHIND, this._P, this._T, this._U);
+    this.camera.position.copy(this._P).addScaledVector(this._U, CAM_HEIGHT);
     this._camUp.copy(this._U);
-    this.emitHud(true);
   }
 
   start() { this.reset(false); if (this.cb.onState) this.cb.onState('playing'); }
@@ -398,12 +420,17 @@ export class MonkeyGame {
   /** @returns false when refused (never freeze a live run from a hook) */
   enterShop() {
     if (this.state === 'playing') return false;
+    // The fitting room is always at the trailhead: nobody wants to try on a
+    // tuxedo while wedged in the crash site's boulders.
+    this.rebuildWorld();
     this.snapMonkeyUpright();
+    this.monkey.group.rotation.set(0, 0, 0);
     this.py = this.groundHeightAt(this.s, this.x);
     this.vy = 0;
     this.grounded = true;
     this.shopT = 0;
     this.state = 'shop';
+    this.snapShopCamera(); // don't lerp the fitting view in from a crash site
     return true;
   }
 
@@ -414,22 +441,39 @@ export class MonkeyGame {
     this.state = 'over';
   }
 
-  /** Close-up three-quarter view of the monkey, biased so he sits above the shop panel. */
-  updateShopCamera(dt) {
+  /**
+   * Close-up three-quarter view of the monkey, biased so he sits above the shop
+   * panel. The camera sits ahead and looks back along the path, so screen-right
+   * is *negative* lateral: aim wide of him (and low) to park him right and clear
+   * of the panel.
+   */
+  fitShopView() {
     this.path.sampleTo(this.s, this._fitP, this._fitT, this._fitU);
     this._fitR.crossVectors(this._fitT, this._fitU).normalize();
     const camPos = this._camTarget.copy(this._fitP)
       .addScaledVector(this._fitT, 3.0)   // in front of him (he faces along +tangent)
       .addScaledVector(this._fitR, this.x + 1.2)
       .addScaledVector(this._fitU, 1.35);
-    this.camera.position.lerp(camPos, clamp(dt * 4, 0, 1));
-    this._camUp.lerp(this._fitU, clamp(dt * 4, 0, 1)).normalize();
-    this.camera.up.copy(this._camUp);
-    // The camera looks back along the path, so screen-right is *negative*
-    // lateral: aim wide of him (and low) to park him right and clear of the panel.
     const look = this._lookAt.copy(this._fitP)
       .addScaledVector(this._fitR, this.x + 0.95)
       .addScaledVector(this._fitU, 1.35);
+    return { camPos, look };
+  }
+
+  updateShopCamera(dt) {
+    const { camPos, look } = this.fitShopView();
+    this.camera.position.lerp(camPos, clamp(dt * 4, 0, 1));
+    this._camUp.lerp(this._fitU, clamp(dt * 4, 0, 1)).normalize();
+    this.camera.up.copy(this._camUp);
+    this.camera.lookAt(look);
+  }
+
+  /** Jump straight to the fitting framing — no fly-through from a crash site. */
+  snapShopCamera() {
+    const { camPos, look } = this.fitShopView();
+    this.camera.position.copy(camPos);
+    this._camUp.copy(this._fitU);
+    this.camera.up.copy(this._camUp);
     this.camera.lookAt(look);
   }
 
@@ -1039,7 +1083,8 @@ export class MonkeyGame {
     }
 
     // banana spin + world transforms for everything on the path
-    for (const b of this.bananas) if (b.active) b.mesh.rotation.y = (b.spin += dt * 3);
+    // roll bananas about their long axis: the crescent keeps facing the camera
+    for (const b of this.bananas) if (b.active) b.mesh.rotation.x = (b.spin += dt * 2.4);
     this.syncWorldTransforms();
 
     // recycle scenery that fell behind
@@ -1056,12 +1101,12 @@ export class MonkeyGame {
     }
 
     // camera: rides the path frame so banking/curves tilt the view, Sonic-style
-    const camS = this.s - 9;
+    const camS = this.s - CAM_BEHIND;
     this.path.sampleTo(camS, this._P, this._T, this._U);
     this._Rv.crossVectors(this._T, this._U).normalize();
     this._tmp.copy(this._P)
       .addScaledVector(this._Rv, this.x * 0.4)
-      .addScaledVector(this._U, 3.5);
+      .addScaledVector(this._U, CAM_HEIGHT);
     const shake = crashed ? Math.max(0, 1 - this.crashTimer) * 0.2 : 0;
     if (shake > 0) this._tmp.y += rand(-shake, shake);
     this.camera.position.lerp(this._tmp, clamp(dt * 6, 0, 1));

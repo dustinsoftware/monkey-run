@@ -259,6 +259,36 @@ kbd {
 
 .hint { font-size: 11px; color: #8a6b3a; font-weight: 700; text-align: left; max-width: 240px; }
 
+/* ------------------------- Top banana modal ---------------------------- */
+/* Centred, and above the shop panel: it appears while the shop is still open. */
+.overlay-victory {
+  align-items: center;
+  justify-content: center;
+  padding-top: 0;
+  background: rgba(6, 14, 6, .78);
+  z-index: 30;
+}
+
+.card-victory {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.title-victory { font-size: 44px; }
+
+.victory-message {
+  font-size: 20px;
+  line-height: 1.45;
+  font-weight: 800;
+  color: #5b3c16;
+  max-width: 420px;
+}
+
+.victory-costumes { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; font-size: 28px; }
+
 .stats {
   display: flex;
   gap: 26px;

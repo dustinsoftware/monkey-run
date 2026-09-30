@@ -129,14 +129,16 @@ export class TrackPath {
   // Generates path data on demand — callers may sample ahead of the last
   // ensure() call (chunk rows extend past it), and clamping instead would
   // bake collapsed geometry into cached chunks → holes in the ground.
+  // Negative indices extrapolate linearly back along the first segment: the
+  // opening runway is a long straight, so "behind the start" is real ground and
+  // the chase camera can sit behind the monkey at s < CAM_BEHIND.
   sampleTo(s, p, t, u) {
     this.ensure(Math.max(s, 0) + STEP);
     let idx = s / STEP - this.baseIndex;
     const maxI = this.posArr.length - 2;
-    if (idx < 0) idx = 0;
     if (idx > maxI) idx = maxI;
-    const i = Math.floor(idx);
-    const f = idx - i;
+    const i = Math.max(Math.floor(idx), 0);
+    const f = idx - i; // may be negative → extrapolation behind the oldest sample
     p.lerpVectors(this.posArr[i], this.posArr[i + 1], f);
     t.copy(this.tanArr[i]).lerp(this.tanArr[i + 1], f).normalize();
     u.copy(this.upArr[i]).lerp(this.upArr[i + 1], f).normalize();

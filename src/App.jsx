@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react';
 import { MonkeyGame } from './game/engine.js';
+import { COSTUMES } from './game/costumes.js';
 import CostumeShop from './shop/CostumeShop.jsx';
+import VictoryModal from './shop/VictoryModal.jsx';
 import { shopStore } from './shop/store.js';
 
 const BEST_KEY = 'monkey-dash-best';
@@ -42,6 +44,8 @@ export default function App() {
     };
   }, []);
 
+  const dismissVictory = useCallback(() => shopStore.dismissVictory(), []);
+
   const startGame = useCallback(() => {
     setHud({ score: 0, bananas: 0 });
     setFinalStats(null);
@@ -68,9 +72,15 @@ export default function App() {
     return shopStore.subscribe(apply);
   }, []);
 
-  // Enter starts / restarts from the overlays — but never while browsing costumes.
+  // Enter starts / restarts from the overlays — but never while browsing costumes,
+  // and never while the top-banana modal is waiting to be dismissed.
   useEffect(() => {
     const onKey = (e) => {
+      if (shopStore.getState().victory && ['Enter', 'Space', 'Escape'].includes(e.code)) {
+        e.preventDefault();
+        shopStore.dismissVictory(); // swallows the key: no restart, no shop close
+        return;
+      }
       if (phase === 'shop') {
         if (e.code === 'Escape') closeShop();
         return;
@@ -126,7 +136,9 @@ export default function App() {
               </button>
             </div>
             {best > 0 && <p className="best">Best score: {best}</p>}
-            <p className="wallet">🍌 {shop.wallet} banana bucks · {shop.owned.length}/9 costumes unlocked</p>
+            <p className="wallet">
+              🍌 {shop.wallet} banana bucks · {shop.owned.length}/{COSTUMES.length} costumes unlocked
+            </p>
           </div>
         </div>
       )}
@@ -162,6 +174,9 @@ export default function App() {
           onTryOn={(id) => gameRef.current?.setCostume(id)}
         />
       )}
+
+      {/* Top banana — shown once the whole wardrobe is owned, until dismissed */}
+      {shop.victory && <VictoryModal onDismiss={dismissVictory} />}
     </>
   );
 }

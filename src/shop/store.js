@@ -2,19 +2,18 @@ import { COSTUMES } from '../game/costumes.js';
 
 // ---------------------------------------------------------------------------
 // Costume shop store — the single source of truth for banana bucks, unlocked
-// outfits and which one is worn. Persisted to localStorage as one JSON blob;
-// price is *derived* from the purchase count so stored state can never drift.
-// See docs/costume-shop.md.
+// outfits and which one is worn. Persisted to localStorage as one JSON blob.
+// Every costume costs COSTUME_PRICE bananas, forever: nothing here may make a
+// price depend on history. See docs/costume-shop.md.
 // ---------------------------------------------------------------------------
 
 export const STORAGE_KEY = 'monkey-dash-shop';
-export const BASE_PRICE = 1000;
-export const PRICE_STEP = 200;
+export const COSTUME_PRICE = 100;
 
 const IDS = new Set(COSTUMES.map((c) => c.id));
-export const priceFor = (purchases) => BASE_PRICE + PRICE_STEP * purchases;
+export const TOTAL_COSTUMES = IDS.size;
 
-const DEFAULTS = () => ({ wallet: 0, owned: [], purchases: 0, worn: null });
+const DEFAULTS = () => ({ wallet: 0, owned: [], purchases: 0, worn: null, victory: false });
 
 const intAtLeast0 = (v, fallback) =>
   Number.isFinite(v) ? Math.max(0, Math.floor(v)) : fallback;
@@ -32,6 +31,8 @@ function sanitize(raw) {
     owned,
     purchases: intAtLeast0(raw.purchases, 0),
     worn,
+    // only a real `true` keeps the celebration pending across a reload
+    victory: raw.victory === true && owned.length === TOTAL_COSTUMES,
   };
 }
 
@@ -58,7 +59,7 @@ const listeners = new Set();
 
 // Snapshots handed to useSyncExternalStore must be stable references.
 function freeze(next) {
-  return Object.freeze({ ...next, owned: Object.freeze([...next.owned]), price: priceFor(next.purchases) });
+  return Object.freeze({ ...next, owned: Object.freeze([...next.owned]), price: COSTUME_PRICE });
 }
 
 function commit(next) {
@@ -87,14 +88,17 @@ export const shopStore = {
     return true;
   },
 
-  /** Unlock forever. No-op unless the id is real, unowned and affordable. */
+  /** Unlock forever for COSTUME_PRICE bananas. No-op unless real, unowned, affordable. */
   buy(id) {
-    if (!IDS.has(id) || state.owned.includes(id) || state.wallet < state.price) return false;
+    if (!IDS.has(id) || state.owned.includes(id) || state.wallet < COSTUME_PRICE) return false;
+    const owned = [...state.owned, id];
     commit({
-      wallet: state.wallet - state.price,
-      owned: [...state.owned, id],
+      wallet: state.wallet - COSTUME_PRICE,
+      owned,
       purchases: state.purchases + 1,
       worn: id,
+      // the purchase that completes the set queues the top-banana modal
+      victory: owned.length === TOTAL_COSTUMES,
     });
     return true;
   },
@@ -105,6 +109,13 @@ export const shopStore = {
     if (id !== null && !state.owned.includes(id)) return false;
     if (state.worn === id) return false;
     commit({ ...state, worn: id });
+    return true;
+  },
+
+  /** Clear the pending top-banana celebration once it has been shown. */
+  dismissVictory() {
+    if (!state.victory) return false;
+    commit({ ...state, victory: false });
     return true;
   },
 

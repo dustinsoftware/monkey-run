@@ -17,10 +17,12 @@ index.html ── src/main.jsx ── src/App.jsx ──────────
 | `index.html` | Vite entry; single `#root` div, canvas mounted by React |
 | `src/main.jsx` | `createRoot(...).render(<App />)` — deliberately **no** `StrictMode` (double-mount would create two WebGL renderers on one canvas) |
 | `src/App.jsx` | Phases (`menu`/`playing`/`over`/`shop`), HUD, overlays, best-score + banana banking |
-| `src/shop/store.js` | Observable costume-shop store (wallet, owned ids, purchases→price, worn); `window.__MONKEY_SHOP` |
-| `src/shop/CostumeShop.jsx` | Costume shop bottom-sheet overlay: wallet header, 9 tiles, try-on / buy / wear |
+| `src/shop/store.js` | Observable costume-shop store (wallet, owned ids, flat price, worn, pending victory); `window.__MONKEY_SHOP` |
+| `src/shop/CostumeShop.jsx` | Costume shop panel: wallet header, 9 tiles, try-on / buy / wear |
+| `src/shop/VictoryModal.jsx` | "Top banana" modal shown once the whole wardrobe is owned |
 | `src/styles.css` | All styling: HUD chips, overlay cards, buttons, shop grid |
 | `src/game/costumes.js` | Costume catalogue + primitive-built outfit builders for the monkey rig |
+| `src/game/banana.js` | `makeBananaGeometry()` — one shared vertex-coloured banana mesh (lathed, bent tapered tube) |
 | `src/game/engine.js` | `MonkeyGame`: renderer/scene/camera/lights, procedural monkey, physics, spawning, collisions, animation loop |
 | `src/game/track.js` | `TrackPath`: procedurally generated spline (straights, banking curves, hills) sampled every `STEP = 1 m` |
 | `tests/game.spec.js`, `tests/costume-shop.spec.js` | Playwright suites + screenshots into `tests/screenshots/` (tracked in git) |
@@ -53,7 +55,12 @@ monoliths sit flush on the surface; random segment generation truncates before a
 ### States — and how React sees them
 `this.state`: `menu` (gentle auto-run past scenery) → `playing` → `crashed` (1.4 s skid +
 tumble, then `over`) → `over` (frozen at the crash site), plus `shop`, a fitting-room state
-entered from the menu or the game-over card (`enterShop()` is ignored while `playing`).
+entered from the menu or the game-over card (`enterShop()` is ignored while `playing`). Entering
+the shop **rewinds the world to the start of the trail** — `rebuildWorld()` builds a fresh
+`TrackPath` at `s = 0`, recycles chunks/scenery and deactivates every pooled boulder/banana, so the
+fitting camera never frames the monkey inside a cliff. `reset()` shares that same `rebuildWorld()`
+(it owns the run stats on top of it) and snaps the camera behind the start via
+`snapCameraToStart()`. See [costume-shop.md](./costume-shop.md).
 Both dispatch chains in `loop()` need explicit branches for every state — their final branch
 is an unguarded `else` that means "over", and the follow-camera block at the end of `loop()`
 is skipped for `shop`, which owns its own close-up framing. See [costume-shop.md](./costume-shop.md).
@@ -116,6 +123,12 @@ descendants) and nothing is parented to a limb pivot, whose rotation is rewritte
 - **Bananas** come from three sources: an arc of 7 over a boulder (p = 0.6), a 6-banana row
   down a *free* lane (p = 0.7), and cliff trails. Picked up when within ±0.95 in `s`/`x` and
   1.2 in `y` of the monkey's chest (`py + 0.8`).
+- **Banana mesh** (`src/game/banana.js`) is one shared geometry for the whole pool: a
+  `LatheGeometry` swept from a tapered radius profile (fat middle, pinched tips), sheared along its
+  length into a crescent, laid down with `rotateZ(-π/2)` so the long axis runs track-right and the
+  curve sits in the camera-facing plane, then vertex-coloured yellow with brown tips. The loop rolls
+  it about that long axis (`mesh.rotation.x`), which keeps the crescent facing the camera instead of
+  spinning a sliver.
 - **Giant cliffs** (`CLIFF_H = 1.9 m`): monolith boxes covering 1–3 lanes, scheduled every
   180–320 m after the first at ~300 m. A lure banana marks the take-off spot and a trail runs
   along the top. Contact is decided from the height he had **at the start of the frame**
@@ -134,10 +147,16 @@ descendants) and nothing is parented to a limb pivot, whose rotation is rewritte
 - **Boulder collision**: `|dx| < r + 0.42 && |ds| < r + 0.35 && py < height − 0.4`.
 
 ### Camera & lighting
-The camera rides the path frame 9 m behind the player at 3.5 m above it, following laterally
-at `x * 0.4`, smoothed with `lerp(dt * 6)`; `camera.up` is lerped toward the surface normal so
-banking tilts the view, and look-at is 8 m ahead at height +1.4 (`x * 0.15`). Crashes add a
-decaying shake. The sun (`DirectionalLight` + shadow map) and the valley floor are
+The camera (`CAM_BEHIND = 9 m`, `CAM_HEIGHT = 3.5 m`) rides the path frame behind the player at
+`s − CAM_BEHIND`, following laterally at `x * 0.4`, smoothed with `lerp(dt * 6)`; `camera.up` is
+lerped toward the surface normal so banking tilts the view, and look-at is 8 m ahead at height +1.4
+(`x * 0.15`). `sampleTo` extrapolates linearly back along its oldest segment for negative indices,
+so "behind the start" is real ground and a real camera perch — without that, at `s < CAM_BEHIND`
+the camera lands *on* the monkey (he drops out of frame) and chunk −1 collapses into a degenerate
+sliver of sky. That matters twice over: the first seconds of every run, and after every shop visit,
+which rewinds to `s = 0`. `snapCameraToStart()` parks the camera at exactly that spot so `reset()`
+does not lerp it across.
+Crashes add a decaying shake. The sun (`DirectionalLight` + shadow map) and the valley floor are
 repositioned to the player each frame.
 
 ### Input
@@ -171,7 +190,8 @@ Keyboard input is ignored unless `state === 'playing'`; arrow keys/space are
 - `phase` state selects what renders: `#menu-overlay`, HUD (only for `playing`/`over`),
   `#gameover-overlay`, `#shop-overlay`.
 - `startGame()` resets HUD/stats, sets `playing`, calls `game.start()`.
-- `Enter`/`Space` start or restart **except** in the shop; `Esc` closes the shop.
+- `Enter`/`Space` start or restart **except** in the shop; `Esc` closes the shop. A pending
+  top-banana modal is checked before any of that: those same keys dismiss it and stop.
 - Persistence: best score under `localStorage['monkey-dash-best']`; costume shop under
   `localStorage['monkey-dash-shop']`. Run bananas are banked into the shop wallet exactly once,
   inside the engine's `onGameOver` callback (never in a render path or effect — returning from
@@ -193,4 +213,4 @@ boots the dev server via `webServer.reuseExistingServer`.
 | boulder crash | game over overlay, final score > 0, restart resets state |
 | cliff ride | timed jump onto plateau, trail bananas collected, survive; late jump crashes (clip regression) |
 | keyboard-only flow | `Enter` starts the game |
-| costume shop (`costume-shop.spec.js`) | banking on death, try-on is free/reversible, buy + price inflation, no overspending, persistence across reload, menu entry/back, every outfit renders |
+| costume shop (`costume-shop.spec.js`) | banking on death (plus the trailhead rewind), try-on is free/reversible, flat 100-banana buys that never inflate, the top-banana modal on completion and its persistence, no overspending, persistence across reload, menu entry/back, banana geometry, every outfit renders |

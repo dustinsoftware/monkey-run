@@ -3,9 +3,9 @@ import { COSTUMES } from '../game/costumes.js';
 import { shopStore } from './store.js';
 
 /**
- * Costume shop: bottom-sheet panel so the monkey stays visible in the fitting
- * camera above it. Try-on is a free preview; buying unlocks forever and raises
- * every price by PRICE_STEP (the store derives that from its purchase count).
+ * Costume shop: left-hand panel so the fitting camera can frame the monkey
+ * beside it. Try-on is a free preview; buying unlocks forever for the flat
+ * COSTUME_PRICE — prices never move, see docs/costume-shop.md.
  */
 export default function CostumeShop({ onBack, onTryOn }) {
   const shop = useSyncExternalStore(shopStore.subscribe, shopStore.getSnapshot);
@@ -27,7 +27,7 @@ export default function CostumeShop({ onBack, onTryOn }) {
               <span id="shop-wallet" className="stat-value">🍌 {shop.wallet}</span>
             </div>
             <div className="shop-balance">
-              <span className="stat-label">Every costume</span>
+              <span className="stat-label">Each costume</span>
               <span id="shop-price" className="stat-value">{shop.price}</span>
             </div>
           </div>
