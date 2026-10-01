@@ -4,6 +4,8 @@ import { COSTUMES } from './game/costumes.js';
 import CostumeShop from './shop/CostumeShop.jsx';
 import VictoryModal from './shop/VictoryModal.jsx';
 import { shopStore } from './shop/store.js';
+import { dailyStore } from './daily/store.js';
+import { useDaily, DailyMenuLine, DailyResult } from './daily/DailyChallenge.jsx';
 
 const BEST_KEY = 'monkey-dash-best';
 
@@ -12,19 +14,26 @@ export default function App() {
   const gameRef = useRef(null);
   const [phase, setPhase] = useState('menu'); // menu | playing | over | shop
   const [shopFrom, setShopFrom] = useState('menu'); // which overlay opened the shop
-  const [hud, setHud] = useState({ score: 0, bananas: 0 });
+  const [hud, setHud] = useState({ score: 0, bananas: 0, distance: 0 });
   const [finalStats, setFinalStats] = useState(null);
+  // Reward from the run that just ended — shown once on the game-over card.
+  const [justPaid, setJustPaid] = useState(0);
   const [best, setBest] = useState(() => Number(localStorage.getItem(BEST_KEY) || 0));
   const shop = useSyncExternalStore(shopStore.subscribe, shopStore.getSnapshot);
 
   useEffect(() => {
     const game = new MonkeyGame(canvasRef.current, {
-      onHud: (s) => setHud({ score: s.score, bananas: s.bananas }),
+      // The engine reports distance too, so the daily chip can count up live.
+      onHud: (s) => setHud({ score: s.score, bananas: s.bananas, distance: s.distance }),
       onGameOver: (stats) => {
         // Banked exactly once per death: crash() fires this callback a single time.
         // Never bank from a render path or an effect keyed on phase/finalStats —
-        // returning from the shop restores phase 'over' and would re-bank.
-        shopStore.addBananas(stats.bananas);
+        // returning from the shop restores phase 'over' and would re-bank. The
+        // daily challenge rides the same single-fire path: recordRun reports today's
+        // best distance and pays its reward at most once, so it can never re-pay.
+        const daily = dailyStore.recordRun(stats.distance);
+        shopStore.addBananas(stats.bananas + daily.reward);
+        setJustPaid(daily.reward);
         setFinalStats(stats);
         setPhase('over');
         setBest((b) => {
@@ -47,8 +56,9 @@ export default function App() {
   const dismissVictory = useCallback(() => shopStore.dismissVictory(), []);
 
   const startGame = useCallback(() => {
-    setHud({ score: 0, bananas: 0 });
+    setHud({ score: 0, bananas: 0, distance: 0 });
     setFinalStats(null);
+    setJustPaid(0);
     setPhase('playing');
     gameRef.current?.start();
   }, []);
@@ -95,6 +105,10 @@ export default function App() {
   }, [phase, startGame, closeShop]);
 
   const showHud = phase === 'playing' || phase === 'over';
+  const daily = useDaily();
+  // Today's best run, including the one in progress (the store only learns about
+  // a run when it ends, but the chip should count up while you play).
+  const liveDailyBest = Math.max(daily.best, hud.distance);
 
   return (
     <>
@@ -110,6 +124,17 @@ export default function App() {
           <div className="hud-item hud-bananas">
             <span className="hud-label">BANANAS</span>
             <span className="hud-value">🍌 {hud.bananas}</span>
+          </div>
+          <div
+            className={`hud-item hud-daily${daily.completed ? ' done' : ''}`}
+            id="daily-chip"
+          >
+            <span className="hud-label">DAILY</span>
+            <span className="hud-value">
+              {daily.completed
+                ? `✅ ${daily.target} m`
+                : `${Math.min(liveDailyBest, daily.target)} / ${daily.target} m`}
+            </span>
           </div>
         </div>
       )}
@@ -139,6 +164,7 @@ export default function App() {
             <p className="wallet">
               🍌 {shop.wallet} banana bucks · {shop.owned.length}/{COSTUMES.length} costumes unlocked
             </p>
+            <DailyMenuLine />
           </div>
         </div>
       )}
@@ -155,6 +181,7 @@ export default function App() {
               <div><span className="stat-label">Best</span><span className="stat-value">{best}</span></div>
             </div>
             <p className="banked">🍌 +{finalStats.bananas} banked · wallet {shop.wallet}</p>
+            <DailyResult justPaid={justPaid} />
             <div className="menu-buttons">
               <button id="go-shop-btn" className="btn btn-alt" onClick={() => openShop('over')}>
                 🛍️ COSTUME SHOP

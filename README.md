@@ -36,6 +36,10 @@ it instead.
   fall back to the road. Cliffs can cover all three lanes (forced jump) or just one/two (dodgeable).
 - Boulders block 1–2 lanes — switch lanes or **jump them** (banana arcs hover over boulders as a reward line)
 - Speed ramps up with distance; score = meters + 10 per banana; best score saved to `localStorage`
+- **Daily challenge**: one shared goal every day — *travel N metres in a single run* (the target is
+  derived from the date, so everyone runs for the same number). Progress shows on the menu, in the
+  HUD and on the game-over card; hitting it pays once per day into the shop wallet, and completing
+  back-to-back days builds a 🔥 streak. See [docs/daily-challenge.md](docs/daily-challenge.md)
 - **Costume shop**: bananas you collect are banked into a persistent wallet, and every death offers
   the shop. Nine outfits (tuxedo, clown, doctor, top hat, dog, bunny, cat, butterfly wings, yellow
   rainsuit + umbrella) cost **100 bananas each — flat, forever, no inflation**. Unlocks are forever,
@@ -52,6 +56,8 @@ it instead.
 - `src/shop/store.js` — observable banana-bucks store (wallet, unlocks, flat 100-banana price, worn outfit, pending victory), persisted to `localStorage`
 - `src/shop/CostumeShop.jsx` — the shop panel: try-on / buy / wear
 - `src/shop/VictoryModal.jsx` — the top-banana modal shown when the wardrobe is complete
+- `src/daily/store.js` — observable daily-challenge store (local day key, date-derived target, today's best run, one payout per day, streak), persisted to `localStorage`
+- `src/daily/DailyChallenge.jsx` — the daily goal line on the menu card and the game-over result
 - `src/App.jsx` — React shell: menu / HUD / game-over / shop overlays, best-score persistence and banana banking; talks to the engine via callbacks
 
 ## Tests
@@ -78,6 +84,9 @@ Screenshots land in `tests/screenshots/`:
 | `12-costume-<id>.png` | one fitting-room preview per outfit (nine files) |
 | `14-banana-row.png` | a row of actual bananas (not macaroni) down the trail |
 | `15-framed-at-trailhead.png` | back from the shop: he stands, framed, at the start of the trail |
+| `16-menu-daily.png` | menu card showing today's distance challenge |
+| `17-hud-daily.png` | the DAILY chip counting up next to score and bananas mid-run |
+| `18-daily-complete.png` | game over on the run that completed the daily goal |
 
 The suite verifies: menu renders, score increases while running on the curved track,
 banana pickup works (deterministic injection), a real boulder collision ends the run,
@@ -90,3 +99,7 @@ to the start of the trail, try-on free and reversible, flat 100-banana buys that
 top-banana modal firing on the last unlock (and surviving a reload until dismissed), you cannot
 overspend, everything survives a reload, corrupt storage falls back to defaults, bananas are shaped
 like bananas, the shop never restarts a run (Space/Esc), and each of the nine outfits renders.
+
+The daily-challenge suite covers: the target is a pure function of the date (and covers the whole
+ladder over a year), progress on menu/HUD/game over, exactly one payout per day, streak growth and
+reset, rollover into a new day, and corrupt storage falling back to defaults.

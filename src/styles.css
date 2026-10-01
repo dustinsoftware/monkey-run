@@ -44,6 +44,30 @@ html, body, #root {
 .hud-label { font-size: 11px; letter-spacing: 2px; opacity: 0.8; }
 .hud-value { font-size: 26px; font-weight: 900; text-shadow: 0 2px 4px rgba(0,0,0,.5); }
 
+/* -------------------------- Daily challenge ------------------------------ */
+/* The chip lives inside .hud, so it shares the HUD's playing/over gating.     */
+.hud-daily.done .hud-value { color: #d9ff9e; }
+
+.daily-line { margin-top: 12px; color: #6b4a20; font-weight: 800; }
+.daily-line.done { color: #2f7a12; }
+
+.daily-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 8px 14px;
+  border: 2px solid #d8b070;
+  border-radius: 14px;
+  background: #fff3d4;
+  color: #5b3c16;
+  font-weight: 800;
+}
+
+.daily-result.done { background: #eaf7d6; border-color: #7fbf4a; }
+.daily-reward { color: #2f7a12; }
+
 /* ----------------------------- Overlays ---------------------------- */
 .overlay {
   position: fixed;

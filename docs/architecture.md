@@ -20,6 +20,8 @@ index.html ── src/main.jsx ── src/App.jsx ──────────
 | `src/shop/store.js` | Observable costume-shop store (wallet, owned ids, flat price, worn, pending victory); `window.__MONKEY_SHOP` |
 | `src/shop/CostumeShop.jsx` | Costume shop panel: wallet header, 9 tiles, try-on / buy / wear |
 | `src/shop/VictoryModal.jsx` | "Top banana" modal shown once the whole wardrobe is owned |
+| `src/daily/store.js` | Observable daily-challenge store (day key, derived target/best/streak, one payout per day); `window.__MONKEY_DAILY` |
+| `src/daily/DailyChallenge.jsx` | Daily goal copy on the menu card and the game-over card |
 | `src/styles.css` | All styling: HUD chips, overlay cards, buttons, shop grid |
 | `src/game/costumes.js` | Costume catalogue + primitive-built outfit builders for the monkey rig |
 | `src/game/banana.js` | `makeBananaGeometry()` — one shared vertex-coloured banana mesh (lathed, bent tapered tube) |
@@ -193,9 +195,13 @@ Keyboard input is ignored unless `state === 'playing'`; arrow keys/space are
 - `Enter`/`Space` start or restart **except** in the shop; `Esc` closes the shop. A pending
   top-banana modal is checked before any of that: those same keys dismiss it and stop.
 - Persistence: best score under `localStorage['monkey-dash-best']`; costume shop under
-  `localStorage['monkey-dash-shop']`. Run bananas are banked into the shop wallet exactly once,
+  `localStorage['monkey-dash-shop']`; daily challenge under `localStorage['monkey-dash-daily']`.
+  Run bananas are banked into the shop wallet exactly once,
   inside the engine's `onGameOver` callback (never in a render path or effect — returning from
-  the shop restores phase `over` and would re-bank).
+  the shop restores phase `over` and would re-bank). That same callback records the run's distance
+  with `dailyStore.recordRun(distance)`, which returns the daily reward (0 unless it just paid) so
+  the payout can go through `addBananas` on the same single-fire path. See
+  [daily-challenge.md](./daily-challenge.md).
 
 ## Build & deploy
 
@@ -213,4 +219,5 @@ boots the dev server via `webServer.reuseExistingServer`.
 | boulder crash | game over overlay, final score > 0, restart resets state |
 | cliff ride | timed jump onto plateau, trail bananas collected, survive; late jump crashes (clip regression) |
 | keyboard-only flow | `Enter` starts the game |
+| daily challenge (`daily-challenge.spec.js`) | target is a pure function of the local date, menu/HUD/game-over progress, one payout per day (and none twice), streak growth and reset, rollover keeps the streak but resets today's best, corrupt storage normalises |
 | costume shop (`costume-shop.spec.js`) | banking on death (plus the trailhead rewind), try-on is free/reversible, flat 100-banana buys that never inflate, the top-banana modal on completion and its persistence, no overspending, persistence across reload, menu entry/back, banana geometry, every outfit renders |
