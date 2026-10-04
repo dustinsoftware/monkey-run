@@ -38,7 +38,9 @@ it instead.
   marks the take-off spot), **ride the banana trail along its top**, then run off the end and
   fall back to the road. Cliffs can cover all three lanes (forced jump) or just one/two (dodgeable).
 - **Walls**: taller slabs you *cannot* jump — more than twice your jump height, never blocking all
-  three lanes, no bananas on top. Read them early and step sideways.
+  three lanes, no bananas on top. The lane they leave open is always runnable: no boulder parks in
+  a slab's runway, and slabs keep 90 m of clearance so you get one lane change per obstacle.
+  Read them early and step sideways.
 - Boulders block 1–2 lanes — switch lanes or **jump them** (banana arcs hover over boulders as a reward line)
 - **Themed levels**: every world is its own palette and scenery set — forest, plains, neighborhood,
   city, shopping mall, desert, pyramid, crystal cave, beach, coral depths, lava tubes, the moon,

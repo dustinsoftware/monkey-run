@@ -160,8 +160,11 @@ Slab scheduling lives in one place (`scheduleSlabs`) and spaces things by distan
 
 * cliffs every `rand(180, 320)` m, walls every `rand(260, 470)` m, both divided by
   `pace(lap) = min(1 + 0.12 * lap, 1.6)`, so a second circuit is busier without changing speed.
-* A slab's start is pushed past any already-scheduled slab it would overlap (`slabStartAfter`),
-  so a wall never grows inside a cliff and vice versa.
+* A slab's start is pushed at least `SLAB_CLEAR = 90 m` past every already-scheduled slab
+  (`slabStartAfter`), so a wall never grows inside a cliff and two obstacles never ask for two
+  different lanes half a second apart. Walls additionally cover **at most two lanes**, and no
+  boulder may sit in the `SLAB_APPROACH = 45 m` runway in front of a slab — otherwise the lane the
+  wall leaves open is plugged, and from the player's seat that *is* an all-three-lane wall.
 
 ## Test hooks (`window.__MONKEY_GAME`)
 

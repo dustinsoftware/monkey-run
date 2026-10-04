@@ -25,6 +25,10 @@ const DESPAWN_BEHIND = 26;     // recycle objects this far behind the player
 const CHUNK_LEN = 20;          // meters per road-ribbon chunk
 const CLIFF_H = 1.9;           // height of cliff platforms (jumpable: apex 2.4)
 const WALL_H = 5.5;            // walls are more than double the jump apex: never jumpable
+// Two obstacles must never ask for two different lanes half a second apart, and a wall's one
+// open lane must not have a rock parked in it — that would be an all-three-lane wall in practice.
+export const SLAB_CLEAR = 90;    // metres end-to-start between any two slabs (~2.5 s at MAX_SPEED)
+export const SLAB_APPROACH = 45; // runway in front of a slab where no boulder may be placed
 const CAM_BEHIND = 9;          // chase camera sits this far behind the player
 const CAM_HEIGHT = 3.5;        // …and this far above the path surface
 const SWIPE_PX = 40;           // travel along the dominant axis that makes it a swipe
@@ -950,6 +954,35 @@ export class MonkeyGame {
     };
   }
 
+  /**
+   * Scheduling invariants over the live world, for regression testing "the wall covered
+   * everything": no unjumpable slab may span all three lanes, no two slabs may sit closer
+   * than `SLAB_CLEAR` apart (−1 while fewer than two exist), and no boulder may be inside a
+   * slab's runway. A wall that leaves one lane open is only fair if that lane is runnable.
+   */
+  testObstacleAudit() {
+    const covers = (c, lane) => Math.abs(LANES[lane] - c.x) <= c.halfW + 0.35;
+    let wallCoversAllLanes = 0, rocksInSlabZone = 0;
+    for (const c of this.cliffs) {
+      if (!c.rideable && [0, 1, 2].every((l) => covers(c, l))) wallCoversAllLanes++;
+    }
+    let minSlabGap = -1;
+    const arr = this.cliffs;
+    for (let i = 0; i < arr.length; i++) {
+      for (let j = i + 1; j < arr.length; j++) {
+        const gap = Math.max(arr[i].sStart, arr[j].sStart) - Math.min(arr[i].sEnd, arr[j].sEnd);
+        if (minSlabGap < 0 || gap < minSlabGap) minSlabGap = Math.round(gap * 10) / 10;
+      }
+    }
+    for (const o of this.obstacles) {
+      if (o.active && this.inSlabZone(o.s)) rocksInSlabZone++;
+    }
+    return {
+      slabs: arr.length, walls: arr.filter((c) => !c.rideable).length,
+      wallCoversAllLanes, minSlabGap, rocksInSlabZone,
+    };
+  }
+
   testJump() { this.jump(); }
   get testAirJumpsLeft() { return this.airJumpsLeft; }
   testSetRevives(n) { this.revivesLeft = Math.max(0, Math.trunc(n) || 0); return this.revivesLeft; }
@@ -1218,12 +1251,19 @@ export class MonkeyGame {
     }
   }
 
+  /**
+   * True when no boulder may sit at this spot: the runway in front of a slab (plus the
+   * slab itself) has to stay clear, or the lane that wall leaves open is plugged.
+   */
+  inSlabZone(s) {
+    for (const c of this.cliffs) {
+      if (s > c.sStart - SLAB_APPROACH && s < c.sEnd + 6) return true;
+    }
+    return false;
+  }
+
   spawnWave() {
     const spawnS = this.s + LOOKAHEAD_S;
-    // keep wave obstacles out of slab zones so cliffs and walls read clearly
-    for (const c of this.cliffs) {
-      if (spawnS > c.sStart - 10 && spawnS < c.sEnd + 6) return;
-    }
 
     const laneIdx = [0, 1, 2];
     for (let i = laneIdx.length - 1; i > 0; i--) {
@@ -1231,20 +1271,25 @@ export class MonkeyGame {
       [laneIdx[i], laneIdx[j]] = [laneIdx[j], laneIdx[i]];
     }
     const blockCount = Math.random() < clamp(0.15 + this.distance / 900, 0.15, 0.5) ? 2 : 1;
-    const blocked = laneIdx.slice(0, blockCount);
 
-    for (const lane of blocked) {
+    // Only lanes that actually got a rock count as blocked, so the banana row below still
+    // picks a genuinely free lane and the slab zones below stay dodgeable.
+    const blocked = [];
+    for (const lane of laneIdx.slice(0, blockCount)) {
+      const oS = spawnS + rand(0, 3);
+      if (this.inSlabZone(oS)) continue; // never park a rock in front of a cliff or wall
       const o = this.getFreeBoulder();
       const s = rand(0.85, 1.25);
       Object.assign(o, { active: true, radius: s * 0.95, height: s * 1.7 });
       o.mesh.visible = true;
-      o.s = spawnS + rand(0, 3);
+      o.s = oS;
       o.x = LANES[lane] + rand(-0.25, 0.25);
       const sc = new THREE.Vector3(s * rand(0.9, 1.1), s * rand(0.8, 0.95), s);
       o.mesh.scale.copy(sc);
       o.quat.setFromEuler(new THREE.Euler(rand(0, 1), rand(0, Math.PI), rand(0, 1)));
       // A boulder may land on bananas an earlier wave already laid down.
       this.clearBananasUnder(o);
+      blocked.push(lane);
 
       // Banana arc over the boulder — rewards jumping. Authored *from* the rock's
       // own height so a big boulder can never swallow its own reward line.
@@ -1315,15 +1360,20 @@ export class MonkeyGame {
     else this.nextWallS = slab.sStart + gap / pace;
   }
 
-  /** Push a slab's start past every scheduled slab it would grow inside of. */
+  /**
+   * Push a slab's start at least `SLAB_CLEAR` metres past every scheduled slab. The old
+   * rule only cleared 12 m, which let a cliff covering lanes 0–1 sit half a second (at top
+   * speed) in front of a wall covering lane 2: two disjoint lane changes with no time for
+   * either. 90 m is one lane change per obstacle, always.
+   */
   slabStartAfter(sStart, len) {
     let s = sStart;
     let moved = true;
     while (moved) {
       moved = false;
       for (const c of this.cliffs) {
-        if (s < c.sEnd + 12 && s + len + 12 > c.sStart) {
-          s = Math.max(s, c.sEnd + 12);
+        if (s < c.sEnd + SLAB_CLEAR && s + len + SLAB_CLEAR > c.sStart) {
+          s = Math.max(s, c.sEnd + SLAB_CLEAR);
           moved = true;
         }
       }
@@ -1342,12 +1392,15 @@ export class MonkeyGame {
     // grow inside each other (a wall inside a cliff would read as one impossible
     // object, and its bananas would audit as buried).
     const sStart = this.slabStartAfter(sStartIn, len);
-    const lanes = [...coveredLanes].sort((a, b) => a - b);
+    // A wall you cannot dodge is not an obstacle but a coin flip, so the builder itself
+    // refuses more than two lanes for anything unjumpable — even when asked (tests do).
+    const rideable = kind !== 'wall';
+    const chosen = rideable ? [...coveredLanes] : [...coveredLanes].slice(0, 2);
+    const lanes = chosen.sort((a, b) => a - b);
     const lo = LANES[lanes[0]], hi = LANES[lanes[lanes.length - 1]];
     const margin = 1.45;
     const x = (lo + hi) / 2;
     const halfW = (hi - lo) / 2 + margin;
-    const rideable = kind !== 'wall';
 
     // reserve a flat straight under/over the slab so it sits flush on the path
     this.path.addForcedStraight(sStart - 8, sStart + len + 8);

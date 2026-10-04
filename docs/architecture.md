@@ -93,6 +93,8 @@ supply it today, so it is currently unused.
 | `CHUNK_LEN` | 20 m | road-ribbon chunk length |
 | `CLIFF_H` | **1.9** m | cliff platform height (jump apex ≈ 2.4) — rideable |
 | `WALL_H` | **5.5** m | wall height — more than double the jump apex, so it is never jumpable |
+| `SLAB_CLEAR` | **90** m | minimum end-to-start distance between any two slabs (~2.5 s at `MAX_SPEED`) |
+| `SLAB_APPROACH` | **45** m | clear runway in front of a slab where no boulder may be placed |
 | `CHEST_Y` | 0.8 m | banana collection height above the surface (`× sizeScale`) |
 | `COLLECT_DX` / `_DS` / `_DY` | 0.95 / 0.95 / 1.2 | pickup box around the chest (lateral / along path / vertical) |
 | `JUMP_APEX` | derived ≈ 2.4 m | `JUMP_VELOCITY² / (2·|GRAVITY|)` — never typed out by hand |
@@ -144,9 +146,12 @@ Because the scale is now an ability stat, `buildMonkey()` sets it from `MONKEY_S
   `sink: false`) and scaled per item. Kinds come from the theme's weighted list — see
   [levels.md](./levels.md).
 - **Boulder waves** (`spawnWave`): 1–2 lanes blocked, spaced by
-  `spawnGap = clamp(speed * 1.35, 20, 36)`. Waves are skipped when the spawn point falls
-  inside any slab zone (`sStart − 10 … sEnd + 6`) and suppressed entirely while
-  `s <= noWavesUntil`.
+  `spawnGap = clamp(speed * 1.35, 20, 36)`. A boulder is dropped (that lane simply is not blocked
+  this wave) when its own spot falls inside a slab zone — `sStart − SLAB_APPROACH … sEnd + 6`, with
+  `SLAB_APPROACH = 45 m` of clear runway in front of every monolith. Waves are suppressed entirely
+  while `s <= noWavesUntil`. This is what keeps a wall dodgeable: the lane it leaves open must never
+  have a rock parked in it, because a wall over two lanes plus a boulder in the third *is* an
+  all-three-lane wall from the player's seat.
 - **Bananas** come from three sources: an arc of 7 over a boulder (p = 0.6), a 6-banana row
   down a *free* lane (p = 0.7), and cliff trails. Picked up when within `COLLECT_DX`/`_DS`
   laterally and along the path (grown by the outfit's `sizeScale`) and `COLLECT_DY` in `y` of
@@ -196,6 +201,14 @@ Because the scale is now an ability stat, `buildMonkey()` sets it from `MONKEY_S
     divided by `pace(lap)`), covering **1–2 lanes only** — a wall that blocked all three would
     be unavoidable, since it is more than twice the jump apex and cannot be cleared. Walls are
     painted from the theme's slab colour and carry no bananas; they exist to force a lane change.
+  * `makeSlab` **clamps non-rideable coverage to two lanes** even when asked for three (the scheduler
+    never asks, but a wall that cannot be dodged is never fair, so the invariant lives in the builder
+    rather than only at the call sites).
+  * **Clearance**: any two slabs are kept at least `SLAB_CLEAR = 90 m` apart end-to-start by
+    `slabStartAfter`. The old rule pushed a new slab only 12 m past an existing one, which let a
+    cliff covering lanes 0–1 sit half a second (at top speed) in front of a wall covering lane 2 —
+    two disjoint lane changes with no time to make them. 90 m is ~2.5 s at `MAX_SPEED`, enough for
+    one lane change per obstacle, always.
 
   Contact is decided from the height he had **at the start of the frame**
   (`pyStart`), because physics and collision checks run in one pass:
@@ -288,6 +301,7 @@ the WebGL boot path and makes "no sound until you touch something" a property of
 | `testSpawnCliffAhead()` | spawn a full-road cliff beyond generated samples; sets `noWavesUntil = sEnd + 60`; returns `{ sStart, sEnd, H, rideable }` (the tests poll those values) |
 | `testSpawnWallAhead(lanes?)` | spawn an unjumpable wall (`rideable: false`, `H = WALL_H`) ahead covering the given lane indices — default: **only** the player's current lane, so it is a forced lane change rather than a death sentence. Returns `{ sStart, sEnd, x, halfW, H }` |
 | `testSpawnWaveNow()` | force one boulder wave right now (used by the banana audit) |
+| `testObstacleAudit()` | scheduling invariants over the live world: `{ slabs, walls, wallCoversAllLanes, minSlabGap, rocksInSlabZone }` — every wall must leave a lane open, no two slabs closer than `SLAB_CLEAR`, no boulder inside a slab's zone |
 | `testBananaAudit()` | re-check every active banana against the reachability rules; returns `{ checked, buried, unreachable, inObstacle, orphan, slabs, walls }`. All five counters must stay 0 / consistent |
 | `testGetLevel()` / `testSetLevelIndex(i)` / `testClearLevelNow()` | themed-level control — see [levels.md](./levels.md) |
 | `testJump()` / `testAirJumpsLeft` (getter) / `testSetRevives(n)` | ability probes — see [abilities.md](./abilities.md) |
@@ -340,7 +354,8 @@ boots the dev server via `webServer.reuseExistingServer`.
 | boulder crash | game over overlay, final score > 0, restart resets state |
 | cliff ride | timed jump onto plateau, trail bananas collected, survive; late jump crashes (clip regression) |
 | keyboard-only flow | `Enter` starts the game |
-| walls (in `game.spec.js`) | an unavoidable wall in your lane ends the run; stepping one lane across survives it; a wall is never jumpable (`H > JUMP_APEX`) and never covers all three lanes |
+| walls (in `game.spec.js`) | an unavoidable wall in your lane ends the run; stepping one lane across survives it; a wall is never jumpable (`H > JUMP_APEX`) |
+| wall dodgeability audit (in `game.spec.js`) | after forcing many waves, cliffs and walls: no wall covers all three lanes, every pair of slabs respects `SLAB_CLEAR`, and no boulder sits in the runway in front of a slab |
 | banana reachability audit (in `game.spec.js`) | after forcing waves, cliffs and walls, every active banana passes the same clearance/envelope/boulder rules `placeBanana` used to create it, and none is orphaned by a slab that has gone away |
 | pickup sound (in `game.spec.js`) | collecting a banana schedules notes (`__MONKEY_SOUND.played` grows); muting stops them; mute survives a reload |
 | themed levels (`levels.spec.js`) | menu is forest, a run starts on a random theme (≥3 distinct across restarts), the HUD chip counts down, clearing a level advances the index/banner/score and wraps into lap 2, every theme renders and is screenshot-tested |

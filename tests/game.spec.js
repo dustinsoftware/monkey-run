@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
-import { JUMP_APEX } from '../src/game/engine.js';
+import { JUMP_APEX, SLAB_CLEAR } from '../src/game/engine.js';
 
 const SHOTS = 'tests/screenshots';
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -293,6 +293,53 @@ test('no banana is ever buried, floating too high, or hiding inside a boulder', 
   }
   expect(seen).toBeGreaterThan(20); // the audit looked at a trail, not an empty pool
   await shot(page, '26-banana-audit');
+  assertNoErrors();
+});
+
+// ---------------------------------------------------------------------------
+// Wall dodgeability — the regression test for "a wall appeared over all three lanes".
+// A wall never covers three lanes; but it is only fair if the one lane it leaves open is
+// actually runnable: no boulder parked in it, and no second monolith asking for a
+// different lane half a second later.
+// ---------------------------------------------------------------------------
+test('obstacles always leave one lane you can run through', async ({ page }) => {
+  const assertNoErrors = watchErrors(page);
+  await page.goto('/');
+  await page.click('#start-btn');
+  await page.waitForTimeout(1000);
+
+  // Long run of natural scheduling plus forced waves. The revive cheat is only there to
+  // keep the monkey alive long enough to reach dense, fast obstacle spacing.
+  let pairsSeen = 0;
+  for (let round = 0; round < 45; round++) {
+    const a = await page.evaluate(() => {
+      const g = window.__MONKEY_GAME;
+      if (g.state !== 'playing') g.start();
+      g.testSetRevives(1e9);
+      if (Math.random() < 0.6) g.testSpawnWaveNow();
+      return { ...g.testObstacleAudit(), dist: Math.round(g.distance), slabsNear: g.cliffs.length };
+    });
+    expect(a.wallCoversAllLanes, `three-lane wall: ${JSON.stringify(a)}`).toBe(0);
+    expect(a.rocksInSlabZone, `rock parked in a slab runway: ${JSON.stringify(a)}`).toBe(0);
+    if (a.minSlabGap >= 0) {
+      pairsSeen++;
+      expect(a.minSlabGap, `slabs only ${a.minSlabGap} m apart: ${JSON.stringify(a)}`)
+        .toBeGreaterThanOrEqual(SLAB_CLEAR - 0.2);
+    }
+    await page.waitForTimeout(650);
+  }
+  expect(pairsSeen, 'never had two slabs in the world at once').toBeGreaterThan(3);
+
+  // The builder itself refuses a three-lane wall — even when somebody asks for one.
+  const clamped = await page.evaluate(() => {
+    const g = window.__MONKEY_GAME;
+    g.testClearCliffs();
+    const w = g.testSpawnWallAhead([0, 1, 2]);
+    const covered = [-2.6, 0, 2.6].filter((x) => Math.abs(x - w.x) <= w.halfW + 0.35).length;
+    return { covered, audit: g.testObstacleAudit() };
+  });
+  expect(clamped.covered, 'a wall covered all three lanes').toBeLessThan(3);
+  expect(clamped.audit.wallCoversAllLanes).toBe(0);
   assertNoErrors();
 });
 
