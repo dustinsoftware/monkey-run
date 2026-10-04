@@ -233,10 +233,24 @@ export default function App() {
             <p className="subtitle">
               Curvy track, giant cliffs. Dodge boulders — or jump ONTO the cliffs and ride the banana trail!
             </p>
+            {/* Each chip carries both wordings; CSS picks the one this device has —
+                keys on a keyboard, gestures where there is only touch. */}
             <div className="controls">
-              <div className="control"><kbd>←</kbd><kbd>A</kbd><span>left lane</span></div>
-              <div className="control"><kbd>→</kbd><kbd>D</kbd><span>right lane</span></div>
-              <div className="control"><kbd>Space</kbd><kbd>↑</kbd><span>jump boulders</span></div>
+              <div className="control">
+                <span className="keys"><kbd>←</kbd><kbd>A</kbd></span>
+                <span className="gestures">swipe ←</span>
+                <span>left lane</span>
+              </div>
+              <div className="control">
+                <span className="keys"><kbd>→</kbd><kbd>D</kbd></span>
+                <span className="gestures">swipe →</span>
+                <span>right lane</span>
+              </div>
+              <div className="control">
+                <span className="keys"><kbd>Space</kbd><kbd>↑</kbd></span>
+                <span className="gestures">tap / swipe ↑</span>
+                <span>jump boulders</span>
+              </div>
             </div>
             <p className="ability-line" id="menu-ability">
               {wornAbility.id ? (

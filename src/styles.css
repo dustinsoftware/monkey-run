@@ -11,7 +11,11 @@ html, body, #root {
   position: fixed;
   inset: 0;
   width: 100vw;
+  /* Safari's `100vh` is the *largest* viewport, so the canvas was ~100 pt taller than
+     what you could see. `dvh` tracks the toolbar collapse and matches the renderer,
+     which sizes itself from innerWidth/innerHeight. */
   height: 100vh;
+  height: 100dvh;
   display: block;
   touch-action: none;
 }
@@ -19,11 +23,16 @@ html, body, #root {
 /* ------------------------------- HUD ------------------------------- */
 .hud {
   position: fixed;
-  top: 18px;
-  left: 18px;
-  right: 18px;
+  top: calc(18px + env(safe-area-inset-top));
+  left: calc(18px + env(safe-area-inset-left));
+  right: calc(18px + env(safe-area-inset-right));
   display: flex;
+  /* Five chips do not fit in 393 pt — wrapping is what keeps them all on screen. */
+  flex-wrap: wrap;
   gap: 14px;
+  row-gap: 8px;
+  /* Room for the mute switch, so no chip ever slides under it. */
+  padding-right: 56px;
   pointer-events: none;
   z-index: 5;
 }
@@ -76,6 +85,12 @@ html, body, #root {
   align-items: flex-start; /* keep cards up top so the monkey is visible below */
   justify-content: center;
   padding-top: max(24px, 5vh);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  /* Anything that does not fit must be scrollable, not unreachable (landscape phones). */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   background: radial-gradient(ellipse at center, rgba(10,25,10,.15), rgba(8,18,8,.55));
   z-index: 10;
 }
@@ -87,6 +102,7 @@ html, body, #root {
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), inset 0 2px 0 rgba(255,255,255,.7);
   padding: 26px 40px;
   text-align: center;
+  width: min(560px, calc(100% - 28px));
   max-width: 560px;
   animation: pop .35s cubic-bezier(.2, 1.6, .4, 1) both;
 }
@@ -94,7 +110,8 @@ html, body, #root {
 @keyframes pop { from { transform: scale(.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 .title {
-  font-size: 46px;
+  /* clamp() keeps desktop at 46 px while phones shrink instead of wrapping mid-word */
+  font-size: clamp(27px, 7vw, 46px);
   font-weight: 900;
   letter-spacing: 2px;
   background: linear-gradient(#ffcf3f, #e8842c 60%, #b44d12);
@@ -104,7 +121,7 @@ html, body, #root {
   filter: drop-shadow(0 3px 0 rgba(122, 74, 30, .55));
 }
 
-.title-over { font-size: 46px; }
+.title-over { font-size: clamp(27px, 7vw, 46px); }
 .subtitle { margin-top: 8px; color: #6b4a20; font-weight: 600; }
 
 .controls {
@@ -326,13 +343,13 @@ kbd {
 }
 
 .level-banner-title {
-  font-size: 46px;
+  font-size: clamp(28px, 7vw, 46px);
   font-weight: 900;
   letter-spacing: 3px;
   text-shadow: 0 4px 12px rgba(0, 0, 0, .55);
 }
 
-.level-banner-sub { font-size: 22px; font-weight: 800; margin-top: 6px; }
+.level-banner-sub { font-size: clamp(15px, 3.4vw, 22px); font-weight: 800; margin-top: 6px; text-align: center; }
 
 @keyframes banner-pop {
   from { transform: translateX(-50%) scale(.7); opacity: 0; }
@@ -341,8 +358,8 @@ kbd {
 
 .sound-toggle {
   position: fixed;
-  top: 18px;
-  right: 18px;
+  top: calc(18px + env(safe-area-inset-top));
+  right: calc(18px + env(safe-area-inset-right));
   z-index: 20;
   width: 46px;
   height: 46px;
@@ -397,11 +414,74 @@ kbd {
 
 .stats {
   display: flex;
-  gap: 26px;
+  gap: clamp(14px, 3vw, 26px);
   justify-content: center;
+  flex-wrap: wrap;
   margin: 18px 0 22px;
 }
 
 .stats > div { display: flex; flex-direction: column; }
 .stat-label { font-size: 12px; letter-spacing: 2px; color: #9a6b2c; text-transform: uppercase; }
-.stat-value { font-size: 30px; font-weight: 900; color: #4a2f10; }
+.stat-value { font-size: clamp(23px, 5vw, 30px); font-weight: 900; color: #4a2f10; }
+
+/* ===========================================================================
+   Responsive layout — phones in either hand. See docs/responsive-layout.md.
+   `compact` (max-width 640 or max-height 520) shrinks type and padding and lets
+   things wrap; `sheet` (portrait ≤700 wide) turns the costume shop into a bottom
+   sheet so the fitting camera can keep the monkey in the band above it. The engine
+   mirrors exactly these two thresholds for its framing.
+   ========================================================================= */
+
+/* Control hints: keys on a keyboard, gestures where there is only touch. */
+.gestures { display: none; }
+
+@media (hover: none) and (pointer: coarse) {
+  .keys { display: none; }
+  .gestures { display: inline; font-weight: 800; }
+}
+
+@media (max-width: 640px), (max-height: 520px) {
+  /* Cards start below the mute switch instead of under it. */
+  .overlay { padding-top: calc(70px + env(safe-area-inset-top)); padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .card { padding: 18px 16px; border-width: 3px; border-radius: 18px; }
+
+  .subtitle, .ability-line, .wallet, .best, .banked, .daily-line, .daily-result { font-size: 13px; }
+  .controls { gap: 8px; margin: 12px 0 14px; }
+  .control { font-size: 12px; padding: 6px 9px; }
+  kbd { font-size: 11px; padding: 2px 6px; }
+
+  /* Thumb-sized tap targets (Apple HIG: 44 pt). */
+  .btn { font-size: 15px; padding: 11px 22px; min-height: 44px; }
+  .btn-tiny { font-size: 12px; padding: 7px 9px; letter-spacing: .5px; min-height: 38px; box-shadow: 0 3px 0 #2f6b0f, 0 6px 10px rgba(0, 0, 0, .25); }
+
+  /* Five HUD chips have to fit in 393 pt: wrap them and shrink the type. */
+  .hud-item { min-width: max-content; padding: 5px 10px; border-radius: 12px; }
+  .hud-label { font-size: 9px; letter-spacing: 1.2px; }
+  .hud-value { font-size: 17px; }
+  .hud-ability .hud-value { font-size: 14px; }
+
+  .title-shop { font-size: 19px; }
+  .costume-text { font-size: 10.5px; min-height: 0; }
+  .card-actions { gap: 4px; }
+}
+
+@media (orientation: portrait) and (max-width: 700px) {
+  .overlay-shop { align-items: flex-end; justify-content: center; padding: 0; }
+
+  /* A bottom sheet, scrolling as one surface rather than a grid inside a box. */
+  .card-shop {
+    width: 100%;
+    max-height: 62vh;
+    max-height: min(62dvh, 580px);
+    gap: 6px;
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+    border-radius: 22px 22px 0 0;
+    border-bottom-width: 0;
+    overflow-y: auto;
+  }
+
+  .costume-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); overflow: visible; }
+  .shop-foot { flex-direction: column; align-items: stretch; gap: 8px; }
+  .hint { max-width: none; text-align: center; font-size: 12px; }
+  #shop-back-btn { width: 100%; }
+}

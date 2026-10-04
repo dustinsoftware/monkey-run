@@ -835,13 +835,28 @@ export class MonkeyGame {
   fitShopView() {
     this.path.sampleTo(this.s, this._fitP, this._fitT, this._fitU);
     this._fitR.crossVectors(this._fitT, this._fitU).normalize();
+    // A phone held upright turns the shop into a bottom sheet (breakpoints live in
+    // styles.css and must match `sheet` below), so there is no side panel to stand next
+    // to: he is centred, pulled back, and aimed at from slightly above so he reads in
+    // the band of scene left above the sheet. Everywhere else he keeps his old spot on
+    // the right of a landscape screen.
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const sheet = h > w && w <= 700;
+    const dist = sheet ? 6.8 : 3.0;      // in front of him (he faces along +tangent)
+    const side = sheet ? 0 : 1.2;
+    // Aiming ~30° down at the trail from 3.4 m up, with him centred laterally, lands his
+    // head-to-feet span in the band of scene above the bottom sheet (which covers the
+    // lower 62% of the screen) — tuned against screenshots, not trigonography.
+    const camY = sheet ? 3.4 : 1.35;
+    const lookY = sheet ? -0.6 : 1.35;   // aim low → he sits higher in the frame
     const camPos = this._camTarget.copy(this._fitP)
-      .addScaledVector(this._fitT, 3.0)   // in front of him (he faces along +tangent)
-      .addScaledVector(this._fitR, this.x + 1.2)
-      .addScaledVector(this._fitU, 1.35);
+      .addScaledVector(this._fitT, dist)
+      .addScaledVector(this._fitR, this.x + side)
+      .addScaledVector(this._fitU, camY);
     const look = this._lookAt.copy(this._fitP)
-      .addScaledVector(this._fitR, this.x + 0.95)
-      .addScaledVector(this._fitU, 1.35);
+      .addScaledVector(this._fitR, this.x + (side ? 0.95 : 0))
+      .addScaledVector(this._fitU, lookY);
     return { camPos, look };
   }
 
@@ -1095,6 +1110,9 @@ export class MonkeyGame {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // Rotating a phone changes the framing rule, not just the aspect: re-snap so the
+    // fitting room does not lerp across from a view that no longer exists.
+    if (this.state === 'shop') this.snapShopCamera();
   }
 
   // -------------------------------------------------------------------------

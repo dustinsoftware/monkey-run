@@ -22,7 +22,7 @@ index.html ── src/main.jsx ── src/App.jsx ──────────
 | `src/shop/VictoryModal.jsx` | "Top banana" modal shown once the whole wardrobe is owned |
 | `src/daily/store.js` | Observable daily-challenge store (day key, derived target/best/streak, one payout per day); `window.__MONKEY_DAILY` |
 | `src/daily/DailyChallenge.jsx` | Daily goal copy on the menu card and the game-over card |
-| `src/styles.css` | All styling: HUD chips, overlay cards, buttons, shop grid |
+| `src/styles.css` | All styling: HUD chips, overlay cards, buttons, shop grid, phone layout (`compact` + `sheet` breakpoints) — see [responsive-layout.md](./responsive-layout.md) |
 | `src/game/costumes.js` | Costume catalogue (incl. each outfit's **ability** data) + primitive-built outfit builders for the monkey rig |
 | `src/game/levels.js` | Themed-level table: 14 worlds of pure palette/scenery data, `LEVEL_SECONDS`, menu level; see [levels.md](./levels.md) |
 | `src/game/audio.js` | `SoundKit` — WebAudio banana pickup, level-clear and revive chimes, mute persistence; `window.__MONKEY_SOUND` |
@@ -359,6 +359,7 @@ boots the dev server via `webServer.reuseExistingServer`.
 | banana reachability audit (in `game.spec.js`) | after forcing waves, cliffs and walls, every active banana passes the same clearance/envelope/boulder rules `placeBanana` used to create it, and none is orphaned by a slab that has gone away |
 | pickup sound (in `game.spec.js`) | collecting a banana schedules notes (`__MONKEY_SOUND.played` grows); muting stops them; mute survives a reload |
 | themed levels (`levels.spec.js`) | menu is forest, a run starts on a random theme (≥3 distinct across restarts), the HUD chip counts down, clearing a level advances the index/banner/score and wraps into lap 2, every theme renders and is screenshot-tested |
+| phone layout (`mobile-layout.spec.js`) | at iPhone 16 metrics (393×852 portrait, 852×393 landscape, touch): nothing crosses the viewport edge, all five HUD chips are visible and clear of the mute switch, gesture hints replace `<kbd>`s, the shop is one scrollable sheet with all nine outfits reachable by tapping, and no card hides a button below the fold |
 | costume abilities (`abilities.spec.js`) | catalogue well-formed, equipping matches the imported stat table, double jump raises the apex, magnet collects an adjacent-lane banana (bare monkey misses it), one revive then death, try-on previews stats and reverts |
 | daily challenge (`daily-challenge.spec.js`) | target is a pure function of the local date, menu/HUD/game-over progress, one payout per day (and none twice), streak growth and reset, rollover keeps the streak but resets today's best, corrupt storage normalises |
 | costume shop (`costume-shop.spec.js`) | banking on death (plus the trailhead rewind), try-on is free/reversible, flat 100-banana buys that never inflate, the top-banana modal on completion and its persistence, no overspending, persistence across reload, menu entry/back, banana geometry, every outfit renders |

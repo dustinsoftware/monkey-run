@@ -51,6 +51,9 @@ it instead.
   hitbox, narrower cat-shaped collisions, or one forgiven crash. The shop tile tells you which side
   it cuts on. See [docs/abilities.md](docs/abilities.md)
 - **Bananas chomp**: each pickup plays a rising WebAudio blip (press `M` to shut it up)
+- **Fits a phone**: at iPhone 16 size the HUD wraps instead of running off-screen, the menu speaks in
+  swipes rather than arrow keys, and the costume shop becomes a bottom sheet with the monkey framed
+  above it. See [docs/responsive-layout.md](docs/responsive-layout.md)
 - **Nothing floats out of reach**: every banana is placed through one helper that refuses spots
   inside rock and clamps everything above a max-height jump; trails belong to their cliff, so when
   a slab goes away its bananas go with it
@@ -110,6 +113,9 @@ Screenshots land in `tests/screenshots/`:
 | `23-ability-hud.png`, `24-shop-abilities.png` | the ability chip and the shop's ability lines |
 | `25-sound-muted.png` | the mute switch, which survives a reload |
 | `26-banana-audit.png` | mid-audit: waves, cliffs and walls all on screen at once |
+| `30-phone-menu.png`, `31-phone-hud.png` | menu and HUD at iPhone 16 size (portrait) |
+| `32-phone-shop.png`, `33-phone-over.png` | the shop as a bottom sheet; game over on a phone |
+| `34-phone-landscape.png` | the same menu with the phone turned sideways |
 | `14-banana-row.png` | a row of actual bananas (not macaroni) down the trail |
 | `15-framed-at-trailhead.png` | back from the shop: he stands, framed, at the start of the trail |
 | `16-menu-daily.png` | menu card showing today's distance challenge |
@@ -127,6 +133,12 @@ to the start of the trail, try-on free and reversible, flat 100-banana buys that
 top-banana modal firing on the last unlock (and surviving a reload until dismissed), you cannot
 overspend, everything survives a reload, corrupt storage falls back to defaults, bananas are shaped
 like bananas, the shop never restarts a run (Space/Esc), and each of the nine outfits renders.
+
+The mobile-layout suite drives the whole thing at iPhone 16 metrics (393×852 portrait and
+852×393 landscape, touch only): nothing crosses the edge of the screen, all five HUD chips are
+visible and clear of the mute switch, swipe hints replace the keyboard ones, the costume shop is a
+single scrollable sheet with all nine outfits reachable by thumb, and no card hides a button below
+the fold. See [docs/responsive-layout.md](docs/responsive-layout.md).
 
 The daily-challenge suite covers: the target is a pure function of the date (and covers the whole
 ladder over a year), progress on menu/HUD/game over, exactly one payout per day, streak growth and
