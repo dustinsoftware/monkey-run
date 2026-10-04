@@ -288,6 +288,7 @@ test('no banana is ever buried, floating too high, or hiding inside a boulder', 
     expect(audit.buried, `buried bananas: ${JSON.stringify(audit)}`).toBe(0);
     expect(audit.unreachable, `floating bananas: ${JSON.stringify(audit)}`).toBe(0);
     expect(audit.inObstacle, `bananas inside rock: ${JSON.stringify(audit)}`).toBe(0);
+    expect(audit.orphan, `bananas owned by a removed slab: ${JSON.stringify(audit)}`).toBe(0);
     await page.waitForTimeout(900); // travel into what was just spawned
   }
   expect(seen).toBeGreaterThan(20); // the audit looked at a trail, not an empty pool

@@ -179,7 +179,9 @@ Because the scale is now an ability stat, `buildMonkey()` sets it from `MONKEY_S
   run: reachable only by a perfect jump, which is exactly what "bananas float where you can't get
   them" looks like from the player's seat. `retireBanana()` clears `active`, visibility *and*
   `owner` in one place; nothing else may deactivate a banana.
-  `testBananaAudit()` re-runs these rules over every active banana for regression testing.
+  `testBananaAudit()` re-runs these rules over every active banana and additionally reports
+  `orphan` — an active banana still pointing at a slab that is no longer in `this.cliffs`, i.e. the
+  exact shape of a code path that removes a slab by hand instead of through `removeSlab()`.
 - **Banana mesh** (`src/game/banana.js`) is one shared geometry for the whole pool: a
   `LatheGeometry` swept from a tapered radius profile (fat middle, pinched tips), sheared along its
   length into a crescent, laid down with `rotateZ(-π/2)` so the long axis runs track-right and the
@@ -286,7 +288,7 @@ the WebGL boot path and makes "no sound until you touch something" a property of
 | `testSpawnCliffAhead()` | spawn a full-road cliff beyond generated samples; sets `noWavesUntil = sEnd + 60`; returns `{ sStart, sEnd, H, rideable }` (the tests poll those values) |
 | `testSpawnWallAhead(lanes?)` | spawn an unjumpable wall (`rideable: false`, `H = WALL_H`) ahead covering the given lane indices — default: **only** the player's current lane, so it is a forced lane change rather than a death sentence. Returns `{ sStart, sEnd, x, halfW, H }` |
 | `testSpawnWaveNow()` | force one boulder wave right now (used by the banana audit) |
-| `testBananaAudit()` | re-check every active banana against the reachability rules; returns `{ checked, buried, unreachable, inObstacle, slabs, walls }`. All four counters must stay 0 / consistent |
+| `testBananaAudit()` | re-check every active banana against the reachability rules; returns `{ checked, buried, unreachable, inObstacle, orphan, slabs, walls }`. All five counters must stay 0 / consistent |
 | `testGetLevel()` / `testSetLevelIndex(i)` / `testClearLevelNow()` | themed-level control — see [levels.md](./levels.md) |
 | `testJump()` / `testAirJumpsLeft` (getter) / `testSetRevives(n)` | ability probes — see [abilities.md](./abilities.md) |
 
@@ -339,7 +341,7 @@ boots the dev server via `webServer.reuseExistingServer`.
 | cliff ride | timed jump onto plateau, trail bananas collected, survive; late jump crashes (clip regression) |
 | keyboard-only flow | `Enter` starts the game |
 | walls (in `game.spec.js`) | an unavoidable wall in your lane ends the run; stepping one lane across survives it; a wall is never jumpable (`H > JUMP_APEX`) and never covers all three lanes |
-| banana reachability audit (in `game.spec.js`) | after forcing waves, cliffs and walls, every active banana passes the same clearance/envelope/boulder rules `placeBanana` used to create it |
+| banana reachability audit (in `game.spec.js`) | after forcing waves, cliffs and walls, every active banana passes the same clearance/envelope/boulder rules `placeBanana` used to create it, and none is orphaned by a slab that has gone away |
 | pickup sound (in `game.spec.js`) | collecting a banana schedules notes (`__MONKEY_SOUND.played` grows); muting stops them; mute survives a reload |
 | themed levels (`levels.spec.js`) | menu is forest, a run starts on a random theme (≥3 distinct across restarts), the HUD chip counts down, clearing a level advances the index/banner/score and wraps into lap 2, every theme renders and is screenshot-tested |
 | costume abilities (`abilities.spec.js`) | catalogue well-formed, equipping matches the imported stat table, double jump raises the apex, magnet collects an adjacent-lane banana (bare monkey misses it), one revive then death, try-on previews stats and reverts |

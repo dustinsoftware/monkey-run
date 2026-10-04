@@ -192,6 +192,47 @@ test('the doctor gets one crash forgiven, then dies like everyone else', async (
   assertNoErrors();
 });
 
+test('a revived cliff takes its whole banana trail with it', async ({ page }) => {
+  const assertNoErrors = watchErrors(page);
+  await page.click('#start-btn');
+  await page.waitForTimeout(900);
+
+  // One slab, no random neighbours, no waves in the way: the only thing out there is
+  // the cliff we are about to be revived from.
+  const info = await page.evaluate(() => {
+    const g = window.__MONKEY_GAME;
+    g.testClearCliffs();
+    g.testSetRevives(1);
+    return g.testSpawnCliffAhead();
+  });
+
+  // Trail + lure bananas sit well above the road (cliff top is 1.9 m, they ride ~1 m higher).
+  const highBananas = () => page.evaluate(({ sStart, sEnd }) => {
+    const g = window.__MONKEY_GAME;
+    return g.bananas.filter((b) => b.active && b.s > sStart - 4 && b.s < sEnd + 1 && b.y >= 2).length;
+  }, info);
+  expect(await highBananas()).toBeGreaterThan(0); // the cliff really did bring bait
+
+  // Run head-long into the face: he cannot clear it from flat ground, so the crash is
+  // called off by the revive — and the slab that got him is removed with it.
+  await page.waitForFunction(
+    () => window.__MONKEY_GAME.invulnerableT > 1,
+    null,
+    { timeout: 60_000 }
+  );
+  await expect(page.locator('#gameover-overlay')).toHaveCount(0);
+
+  const after = await page.evaluate(() => ({ ...window.__MONKEY_GAME.testBananaAudit() }));
+  expect(after.slabs).toBe(0);            // the cliff is gone …
+  expect(after.orphan, `orphaned bananas: ${JSON.stringify(after)}`).toBe(0);
+  expect(await highBananas(), 'its trail floated on over bare road').toBe(0);
+
+  // …and a second hit is fatal now that the second opinion is spent.
+  await page.waitForFunction(() => window.__MONKEY_GAME.invulnerableT <= 0, null, { timeout: 10_000 });
+  expect(after.unreachable).toBe(0);
+  assertNoErrors();
+});
+
 test('the shop prints every ability, and try-on previews how an outfit handles', async ({ page }) => {
   const assertNoErrors = watchErrors(page);
   await expect(page.locator('#menu-ability')).toContainText('Bare monkey');

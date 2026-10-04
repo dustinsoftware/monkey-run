@@ -70,7 +70,10 @@ types one wrong, inherits the default instead of handing the engine `undefined` 
 2. `this.revivesLeft > 0` → spend it and keep running:
    * `revivesLeft--`, `invulnerableT = REVIVE_GRACE = 1.4 s`,
    * deactivate every boulder within ±12 m of the player,
-   * remove any slab whose `sStart` is inside `[s − 2, s + 12]` (the wall that got you is gone),
+   * remove any slab whose `sStart` is inside `[s − 2, s + 12]` (the wall that got you is gone) —
+     through `removeSlab()`, never by hand. Dropping the slab from `this.cliffs` without retiring
+     its bananas would leave a cliff trail hanging in mid-air over bare road for as long as it takes
+     to fall behind the player, which is the floating-bait bug this whole area exists to kill.
    * snap to the surface (`py = groundHeightAt(s, x)`, `vy = 0`, `grounded = true`),
    * play the revive chime and report it through `cb.onRevive?.({ left })`.
 3. otherwise crash for real, exactly as before.
@@ -122,6 +125,10 @@ takes them back). Try-on is still free — abilities are not a purchase, only th
     a lane change; bare monkey misses it.
 * **revive** — `testSetRevives(1)` then an unavoidable boulder: no game-over overlay, run keeps
     going, and a second boulder does end it.
+* **a revived cliff takes its bananas with it** — run head-long into a full-road cliff while
+  holding one revive (`testSetRevives(1)`): the slab is gone, every banana it owned (lure + trail)
+  is retired with it, and `testBananaAudit().orphan` stays 0. Before this rule was written down the
+  trail stayed behind as floating bait over bare road.
 * Screenshots: `23-ability-hud.png` (HUD chip), `24-shop-abilities.png`.
 
 ## Review checklist
@@ -132,3 +139,4 @@ takes them back). Try-on is still free — abilities are not a purchase, only th
 * [ ] `setCostume(null)` restores every default (scale, chest height, padding, jumps).
 * [ ] Try-on previews stats; leaving the shop reverts to the worn outfit (existing rule).
 * [ ] Slab geometry stays unscaled by `hitboxScale` so cliff tests keep their meaning.
+* [ ] A revive removes slabs through `removeSlab()`, so owned bananas never outlive them.

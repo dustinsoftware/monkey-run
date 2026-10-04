@@ -737,9 +737,9 @@ export class MonkeyGame {
     for (let i = this.cliffs.length - 1; i >= 0; i--) {
       const c = this.cliffs[i];
       if (c.sStart < this.s - 2 || c.sStart > this.s + 12) continue;
-      this.scene.remove(c.group);
-      disposeGroup(c.group);
-      this.cliffs.splice(i, 1);
+      // removeSlab, never a hand-rolled splice: the slab *owns* its banana trail, and
+      // a trail nobody retires floats over bare road until it falls behind the player.
+      this.removeSlab(c);
     }
 
     this.py = this.groundHeightAt(this.s, this.x);
@@ -924,13 +924,16 @@ export class MonkeyGame {
   /**
    * Re-run the reachability rules over every active banana. Every counter must be
    * zero: nothing buried in a slab, nothing above the reachable envelope, nothing
-   * inside a boulder. This is the regression test for "bananas float".
+   * inside a boulder, and no banana still owned by a slab that has gone away (the
+   * shape of any code path that drops a slab without going through `removeSlab`).
+   * This is the regression test for "bananas float".
    */
   testBananaAudit() {
-    let checked = 0, buried = 0, unreachable = 0, inObstacle = 0;
+    let checked = 0, buried = 0, unreachable = 0, inObstacle = 0, orphan = 0;
     for (const b of this.bananas) {
       if (!b.active) continue;
       checked++;
+      if (b.owner !== null && !this.cliffs.includes(b.owner)) orphan++;
       const g = this.groundHeightAt(b.s, b.x);
       if (b.y < g + BANANA_MIN_CLEAR - 1e-6) buried++;
       if (b.y > g + BANANA_MAX_Y + 1e-6) unreachable++;
@@ -942,7 +945,7 @@ export class MonkeyGame {
     }
     const walls = this.cliffs.filter((c) => !c.rideable).length;
     return {
-      checked, buried, unreachable, inObstacle,
+      checked, buried, unreachable, inObstacle, orphan,
       slabs: this.cliffs.length, walls,
     };
   }
