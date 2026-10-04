@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
+import { JUMP_APEX } from '../src/game/engine.js';
 
 const SHOTS = 'tests/screenshots';
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -186,5 +187,149 @@ test('keyboard-only flow: Enter starts the game', async ({ page }) => {
   await expect(page.locator('#menu-overlay')).toHaveCount(0);
   await expect(page.locator('.hud-score')).toBeVisible();
   await shot(page, '08-keyboard-start');
+  assertNoErrors();
+});
+
+// ---------------------------------------------------------------------------
+// Walls: slabs you cannot jump. They exist to force a lane change, so they must
+// never block all three lanes and must never be clearable by a max-height jump.
+// See docs/architecture.md → "Slabs".
+// ---------------------------------------------------------------------------
+test('a wall in your lane is unavoidable — jumping does not save you', async ({ page }) => {
+  const assertNoErrors = watchErrors(page);
+  await page.goto('/');
+  await page.click('#start-btn');
+  await page.waitForTimeout(1000);
+
+  // deterministic: no random slabs, no waves on the approach
+  const wall = await page.evaluate(async () => {
+    const g = window.__MONKEY_GAME;
+    g.testClearCliffs();
+    return g.testSpawnWallAhead(); // defaults to the player's own lane
+  });
+  expect(wall.H).toBeGreaterThan(JUMP_APEX * 2); // more than double a max jump
+
+  // Jump at the wall anyway: it is taller than any jump, so he eats it.
+  await page.waitForFunction(
+    ({ sStart }) => window.__MONKEY_GAME.s >= sStart - window.__MONKEY_GAME.speed * 0.28,
+    wall, { timeout: 30_000 }
+  );
+  await page.keyboard.press('Space');
+  await expect(page.locator('#gameover-overlay')).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(1600);
+  await shot(page, '19-wall-crash');
+  assertNoErrors();
+});
+
+test('stepping one lane across survives a wall, and never all three lanes are blocked', async ({ page }) => {
+  const assertNoErrors = watchErrors(page);
+  await page.goto('/');
+  await page.click('#start-btn');
+  await page.waitForTimeout(1000);
+
+  const info = await page.evaluate(() => {
+    const g = window.__MONKEY_GAME;
+    g.testClearCliffs();
+    const wall = g.testSpawnWallAhead([g.laneIndex]); // his lane only
+    return { ...wall, lane: g.laneIndex };
+  });
+
+  // Get out of the way well before it arrives.
+  await page.waitForFunction(
+    ({ sStart }) => window.__MONKEY_GAME.s >= sStart - window.__MONKEY_GAME.speed * 1.2,
+    info, { timeout: 30_000 }
+  );
+  const dodged = await page.evaluate(() => {
+    const g = window.__MONKEY_GAME;
+    const target = g.laneIndex === 0 ? 1 : 0;
+    while (g.laneIndex !== target) { g.moveLeft(); }
+    return g.laneIndex;
+  });
+  expect(dodged).not.toBe(info.lane);
+
+  // He is past the wall and still running.
+  await page.waitForFunction(({ sEnd }) => window.__MONKEY_GAME.s >= sEnd + 4, info, { timeout: 30_000 });
+  await expect(page.locator('#gameover-overlay')).toHaveCount(0);
+
+  // A wall that covered every lane would be a death sentence, not an obstacle.
+  const audit = await page.evaluate(() => {
+    const g = window.__MONKEY_GAME;
+    g.testClearCliffs();
+    const w = g.testSpawnWallAhead([0, 1]);
+    const free = g.groundHeightAt(w.sStart + 2, 2.6); // lane 2 must be open
+    return { walls: g.testBananaAudit().walls, free };
+  });
+  expect(audit.walls).toBe(1);
+  expect(audit.free).toBe(0);
+  assertNoErrors();
+});
+
+// ---------------------------------------------------------------------------
+// Banana reachability audit — the regression test for "bananas float in places
+// you can't get to". Every banana goes through placeBanana, which refuses spots
+// inside rock and clamps everything above a max-height jump's chest.
+// ---------------------------------------------------------------------------
+test('no banana is ever buried, floating too high, or hiding inside a boulder', async ({ page }) => {
+  const assertNoErrors = watchErrors(page);
+  await page.goto('/');
+  await page.click('#start-btn');
+  await page.waitForTimeout(1200);
+
+  let seen = 0;
+  for (let round = 0; round < 4; round++) {
+    const audit = await page.evaluate(() => {
+      const g = window.__MONKEY_GAME;
+      g.testSpawnWaveNow();
+      g.testSpawnCliffAhead();
+      g.testSpawnWallAhead([Math.random() < 0.5 ? 0 : 2]);
+      return g.testBananaAudit();
+    });
+    seen = Math.max(seen, audit.checked);
+    expect(audit.buried, `buried bananas: ${JSON.stringify(audit)}`).toBe(0);
+    expect(audit.unreachable, `floating bananas: ${JSON.stringify(audit)}`).toBe(0);
+    expect(audit.inObstacle, `bananas inside rock: ${JSON.stringify(audit)}`).toBe(0);
+    await page.waitForTimeout(900); // travel into what was just spawned
+  }
+  expect(seen).toBeGreaterThan(20); // the audit looked at a trail, not an empty pool
+  await shot(page, '26-banana-audit');
+  assertNoErrors();
+});
+
+// ---------------------------------------------------------------------------
+// Pickup sound: synthesised WebAudio, unlocked by the first real gesture, and a
+// mute flag that survives a reload. See docs/architecture.md → "Sound".
+// ---------------------------------------------------------------------------
+test('collecting a banana plays a chomp, and muting shuts it up for good', async ({ page }) => {
+  const assertNoErrors = watchErrors(page);
+  await page.goto('/');
+
+  // A real click is the gesture that opens the AudioContext.
+  await page.click('#start-btn');
+  await page.waitForTimeout(900);
+  expect(await page.evaluate(() => window.__MONKEY_SOUND.available)).toBe(true);
+
+  const before = await page.evaluate(() => window.__MONKEY_SOUND.played);
+  await page.evaluate(() => window.__MONKEY_GAME.testSpawnBananaAtPlayer());
+  await expect(async () => {
+    expect(await bananaCount(page)).toBe(1);
+  }).toPass({ timeout: 5000 });
+  const after = await page.evaluate(() => window.__MONKEY_SOUND.played);
+  expect(after).toBeGreaterThan(before); // the chomp was scheduled
+
+  // Mute (button), then nothing more is ever scheduled.
+  await page.click('#sound-toggle');
+  expect(await page.evaluate(() => window.__MONKEY_SOUND.muted)).toBe(true);
+  const mutedAt = await page.evaluate(() => window.__MONKEY_SOUND.played);
+  await page.evaluate(() => {
+    for (let i = 0; i < 3; i++) window.__MONKEY_GAME.testSpawnBananaAtPlayer();
+  });
+  await page.waitForTimeout(1200);
+  expect(await page.evaluate(() => window.__MONKEY_SOUND.played)).toBe(mutedAt);
+
+  // Muting is a preference, not a mood: it survives a reload.
+  await page.reload();
+  await expect(page.locator('#menu-overlay')).toBeVisible();
+  expect(await page.evaluate(() => window.__MONKEY_SOUND.muted)).toBe(true);
+  await shot(page, '25-sound-muted');
   assertNoErrors();
 });

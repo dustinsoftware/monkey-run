@@ -220,12 +220,18 @@ fallback for smaller screens). Header shows banana bucks (`#shop-wallet`) and th
 (`#shop-price`, labelled *Each costume* — it never changes again).
 
 A 3-column grid holds the nine `.costume-card`s (`[data-costume="<id>"]`, plus `.owned` when
-unlocked). Per card: icon, name, `.owned-badge` (unlocked), `.worn-badge` (currently worn),
+unlocked) — **nine, never more**: the way back to no outfit is `#shop-bare-btn` in the header, not a
+tenth card. Per card: icon, name, `.owned-badge` (unlocked), `.worn-badge` (currently worn),
 `.costume-price` — **rendered only on locked cards**, so price assertions never meet a stale label —
-and a `.card-actions` row with one `.try-btn` ("TRY ON", "TRYING" while previewed) plus exactly one
+an ability line (`.costume-ability` + `.costume-text`, see [abilities.md](./abilities.md)), and a
+`.card-actions` row with one `.try-btn` ("TRY ON", "TRYING" while previewed) plus exactly one
 state button: unowned `.buy-btn` ("BUY & WEAR", `disabled` while the wallet cannot pay), owned
 `.wear-btn` ("WEAR", or "WORN" and disabled for the worn id). Footer: `#shop-back-btn` and a hint
 that try-on is free.
+
+Since abilities are data on the costume, `setCostume(id)` — which try-on already calls — also swaps
+the outfit's gameplay numbers, so previewing an outfit previews how it *handles*. Nothing else in
+the shop changes: prices stay flat, unlocks stay forever, and leaving still drops unpaid previews.
 
 ## Tests (`tests/costume-shop.spec.js`)
 

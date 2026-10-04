@@ -17,11 +17,14 @@ pnpm start      # or pnpm dev — same thing, http://localhost:5173
 | -------------- | --------------- |
 | ← / A          | move left       |
 | → / D          | move right      |
-| Space / ↑ / W  | jump            |
+| Space / ↑ / W  | jump (again in mid-air if your costume grants a second one) |
 | Enter          | start / restart |
+| M              | mute / unmute   |
 | Esc            | leave the costume shop |
 
-Touch: swipe left/right to change lanes, tap to jump. Keys do nothing while the costume shop is
+Touch: swipe left/right to change lanes, **swipe up or tap** to jump (a swipe down does nothing —
+there is nothing to duck under). One finger per gesture, and gestures only register during a run.
+Keys do nothing while the costume shop is
 open, so browsing never starts a run. While the **top banana** modal is up, Enter/Space/Esc dismiss
 it instead.
 
@@ -34,7 +37,21 @@ it instead.
 - **Giant cliffs**: monolith platforms rise out of the trail ahead. Jump onto one (a lure banana
   marks the take-off spot), **ride the banana trail along its top**, then run off the end and
   fall back to the road. Cliffs can cover all three lanes (forced jump) or just one/two (dodgeable).
+- **Walls**: taller slabs you *cannot* jump — more than twice your jump height, never blocking all
+  three lanes, no bananas on top. Read them early and step sideways.
 - Boulders block 1–2 lanes — switch lanes or **jump them** (banana arcs hover over boulders as a reward line)
+- **Themed levels**: every world is its own palette and scenery set — forest, plains, neighborhood,
+  city, shopping mall, desert, pyramid, crystal cave, beach, coral depths, lava tubes, the moon,
+  rainbow sky and neo-circuit sci-fi. Survive **60 seconds** to beat a level and step into the next;
+  every run starts on a **random** theme. See [docs/levels.md](docs/levels.md)
+- **Costume abilities**: every outfit changes how the monkey plays — faster (harder), double jump,
+  higher hop, floaty umbrella drag, banana-sniffing magnet, fatter banana value with a bigger
+  hitbox, narrower cat-shaped collisions, or one forgiven crash. The shop tile tells you which side
+  it cuts on. See [docs/abilities.md](docs/abilities.md)
+- **Bananas chomp**: each pickup plays a rising WebAudio blip (press `M` to shut it up)
+- **Nothing floats out of reach**: every banana is placed through one helper that refuses spots
+  inside rock and clamps everything above a max-height jump; trails belong to their cliff, so when
+  a slab goes away its bananas go with it
 - Speed ramps up with distance; score = meters + 10 per banana; best score saved to `localStorage`
 - **Daily challenge**: one shared goal every day — *travel N metres in a single run* (the target is
   derived from the date, so everyone runs for the same number). Progress shows on the menu, in the
@@ -51,7 +68,9 @@ it instead.
 ## Architecture
 
 - `src/game/engine.js` — the whole Three.js game: scene, procedural low-poly monkey (capsules/spheres/tube tail) with a hand-rolled run cycle & jump pose, physics, spawning, collision
-- `src/game/costumes.js` — the nine outfits, also built from primitives and pinned to rig hosts (`body`, `head`, limb pivots)
+- `src/game/costumes.js` — the nine outfits **and their abilities**, also built from primitives and pinned to rig hosts (`body`, `head`, limb pivots)
+- `src/game/levels.js` — the 14 themed worlds as pure palette/scenery data plus the 60 s level rule
+- `src/game/audio.js` — WebAudio pickup / level-clear / revive chimes and the mute switch
 - `src/game/banana.js` — the collectible banana mesh itself: one lathed, bent, tapered, vertex-coloured banana shared by the whole pool
 - `src/shop/store.js` — observable banana-bucks store (wallet, unlocks, flat 100-banana price, worn outfit, pending victory), persisted to `localStorage`
 - `src/shop/CostumeShop.jsx` — the shop panel: try-on / buy / wear
@@ -82,6 +101,13 @@ Screenshots land in `tests/screenshots/`:
 | `11-shop-two-unlocked.png` | shop with two costumes unlocked (price still 100) |
 | `13-top-banana.png` | the whole wardrobe owned → top banana modal |
 | `12-costume-<id>.png` | one fitting-room preview per outfit (nine files) |
+| `19-wall-crash.png` | an unjumpable wall in your lane |
+| `20-hud-level.png` | the LEVEL chip counting down mid-run |
+| `21-level-banner.png` | the banner between two levels |
+| `22-level-<id>.png` | one screenshot per themed world (fourteen files) |
+| `23-ability-hud.png`, `24-shop-abilities.png` | the ability chip and the shop's ability lines |
+| `25-sound-muted.png` | the mute switch, which survives a reload |
+| `26-banana-audit.png` | mid-audit: waves, cliffs and walls all on screen at once |
 | `14-banana-row.png` | a row of actual bananas (not macaroni) down the trail |
 | `15-framed-at-trailhead.png` | back from the shop: he stands, framed, at the start of the trail |
 | `16-menu-daily.png` | menu card showing today's distance challenge |
@@ -103,3 +129,12 @@ like bananas, the shop never restarts a run (Space/Esc), and each of the nine ou
 The daily-challenge suite covers: the target is a pure function of the date (and covers the whole
 ladder over a year), progress on menu/HUD/game over, exactly one payout per day, streak growth and
 reset, rollover into a new day, and corrupt storage falling back to defaults.
+
+The levels suite proves the ladder works: forest on the menu, a random theme when you actually
+start, the countdown chip, level clears (banner, score bonus, wrap into lap 2) and that all
+fourteen worlds render. The abilities suite proves every outfit's stats match the catalogue and
+that double jump, magnet and the doctor revive work in the engine. Two more regression checks live
+in the gameplay suite: walls (unavoidable in your lane, survivable one lane over, never jumpable,
+never all three lanes), a **banana audit** (nothing may spawn buried in rock, inside a boulder or
+above the reachable envelope — and nothing may outlive the slab it was placed on) and the
+**pickup sound** counter.

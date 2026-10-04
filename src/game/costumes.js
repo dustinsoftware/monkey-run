@@ -15,17 +15,135 @@ import * as THREE from 'three';
 //    props would flail. The rainsuit umbrella therefore lives on `body`.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Abilities — every outfit changes how the monkey plays, and it is all data.
+// The engine reads these numbers and nothing else decides what a costume does;
+// the shop prints them, and the tests import the same table. See
+// docs/abilities.md.
+// ---------------------------------------------------------------------------
+export const ABILITY_DEFAULTS = {
+  speedMul: 1,      // multiplies the distance-ramped target speed
+  jumpMul: 1,       // multiplies JUMP_VELOCITY on a ground jump
+  extraJumps: 0,    // air jumps available after leaving the ground (1 = double jump)
+  fallMul: 1,       // scales |gravity| while falling (vy < 0) — floatiness
+  magnet: 0,        // metres ahead within which bananas drift to your lane
+  valueBonus: 0,    // extra score per banana collected
+  hitboxScale: 1,   // scales the boulder collision padding
+  sizeScale: 1,     // visual scale of the monkey + how high his chest reaches
+  revives: 0,       // crashes forgiven per run
+};
+
+/** The bare monkey: every stat at its default. */
+export const BARE_ABILITY = Object.freeze({
+  id: null, label: 'Bare Monkey', text: 'No outfit, no special tricks.', ...ABILITY_DEFAULTS,
+});
+
 export const COSTUMES = [
-  { id: 'tuxedo', label: 'Tuxedo', icon: '🎩' },
-  { id: 'clown', label: 'Clown', icon: '🤡' },
-  { id: 'doctor', label: 'Doctor', icon: '🩺' },
-  { id: 'tophat', label: 'Top Hat', icon: '🎩' },
-  { id: 'dog', label: 'Dog Outfit', icon: '🐶' },
-  { id: 'bunny', label: 'Bunny Outfit', icon: '🐰' },
-  { id: 'cat', label: 'Cat Outfit', icon: '🐱' },
-  { id: 'butterfly', label: 'Butterfly Wings', icon: '🦋' },
-  { id: 'rainsuit', label: 'Yellow Rainsuit + Umbrella', icon: '☔' },
+  {
+    id: 'tuxedo', label: 'Tuxedo', icon: '🎩',
+    ability: {
+      id: 'dapper-sprint', label: 'Dapper Sprint',
+      text: 'You look great going faster: more score per metre, less time to read the trail.',
+      speedMul: 1.15,
+    },
+  },
+  {
+    id: 'clown', label: 'Clown', icon: '🤡',
+    ability: {
+      id: 'bouncy-nose', label: 'Bouncy Nose',
+      text: 'The red nose is a trampoline — one extra jump in mid-air.',
+      extraJumps: 1,
+    },
+  },
+  {
+    id: 'doctor', label: 'Doctor', icon: '🩺',
+    ability: {
+      id: 'second-opinion', label: 'Second Opinion',
+      text: 'One crash per run is called off and treated on the spot.',
+      revives: 1,
+    },
+  },
+  {
+    id: 'tophat', label: 'Top Hat', icon: '🎩',
+    ability: {
+      id: 'old-top-banana', label: 'Old Top Banana',
+      text: 'Bananas are worth 15, but a bigger monkey is a bigger target.',
+      valueBonus: 5, hitboxScale: 1.25, sizeScale: 1.1,
+    },
+  },
+  {
+    id: 'dog', label: 'Dog Outfit', icon: '🐶',
+    ability: {
+      id: 'good-nose', label: 'Good Nose',
+      text: 'Bananas one lane over get sniffed out and steered to you.',
+      magnet: 6.5,
+    },
+  },
+  {
+    id: 'bunny', label: 'Bunny Outfit', icon: '🐰',
+    ability: {
+      id: 'bunny-hop', label: 'Bunny Hop',
+      text: 'Hind legs: a higher single jump, no second one.',
+      jumpMul: 1.14,
+    },
+  },
+  {
+    id: 'cat', label: 'Cat Outfit', icon: '🐱',
+    ability: {
+      id: 'lands-on-feet', label: 'Lands on Feet',
+      text: 'Threads boulders that would clip the bare monkey.',
+      hitboxScale: 0.78,
+    },
+  },
+  {
+    id: 'butterfly', label: 'Butterfly Wings', icon: '🦋',
+    ability: {
+      id: 'wing-flap', label: 'Wing Flap',
+      text: 'A flap at the top of the arc, then a slow float down.',
+      extraJumps: 1, fallMul: 0.82,
+    },
+  },
+  {
+    id: 'rainsuit', label: 'Yellow Rainsuit + Umbrella', icon: '☔',
+    ability: {
+      id: 'umbrella-drag', label: 'Umbrella Drag',
+      text: 'The umbrella catches the air: long hang time, no second jump.',
+      fallMul: 0.62, jumpMul: 1.05,
+    },
+  },
 ];
+
+const ABILITY_BY_ID = new Map(COSTUMES.map((c) => [c.ability.id, c]));
+
+/** The costume entry that owns an ability id (or undefined). */
+export function costumeForAbility(abilityId) { return ABILITY_BY_ID.get(abilityId); }
+
+// Only real, finite stats from the table above survive: a typo or a half-written
+// entry resolves to its default instead of becoming NaN arithmetic in the loop.
+const clean = (o) =>
+  Object.fromEntries(
+    Object.entries(o).filter(([k, v]) => k in ABILITY_DEFAULTS && Number.isFinite(v))
+  );
+
+/**
+ * Resolve the stat block for a worn outfit. `null` / '' is the bare baseline.
+ * Unknown ids resolve to the baseline too, so a stale localStorage value can
+ * never hand the engine stats it has no field for.
+ */
+export function abilityFor(costumeId) {
+  if (!costumeId) return { ...BARE_ABILITY };
+  const c = COSTUMES.find((x) => x.id === costumeId);
+  if (!c) return { ...BARE_ABILITY };
+  // Defaults first, always: a costume only lists what differs from the baseline,
+  // and a missing stat would become `undefined` arithmetic in the engine loop.
+  return {
+    ...ABILITY_DEFAULTS,
+    id: c.ability.id,
+    label: c.ability.label,
+    text: c.ability.text,
+    ...clean(c.ability),
+  };
+}
 
 const mat = (hex, opts = {}) =>
   new THREE.MeshStandardMaterial({ color: hex, roughness: 0.65, ...opts });

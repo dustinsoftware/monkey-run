@@ -31,6 +31,16 @@ export default function CostumeShop({ onBack, onTryOn }) {
               <span id="shop-price" className="stat-value">{shop.price}</span>
             </div>
           </div>
+          {/* Deliberately not a .costume-card: the grid holds nine, never more. */}
+          <button
+            type="button"
+            id="shop-bare-btn"
+            className="btn btn-tiny bare-btn"
+            disabled={!shop.worn}
+            onClick={() => shopStore.wear(null)}
+          >
+            BARE MONKEY
+          </button>
         </div>
 
         <div className="costume-grid">
@@ -46,6 +56,8 @@ export default function CostumeShop({ onBack, onTryOn }) {
               >
                 <span className="costume-icon" aria-hidden="true">{c.icon}</span>
                 <span className="costume-name">{c.label}</span>
+                <span className="costume-ability">{c.ability.label.toUpperCase()}</span>
+                <p className="costume-text">{c.ability.text}</p>
                 {owned && <span className="owned-badge">OWNED</span>}
                 {worn && <span className="worn-badge">WORN</span>}
                 {!owned && <span className="costume-price">🍌 {shop.price}</span>}

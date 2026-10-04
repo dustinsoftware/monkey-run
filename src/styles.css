@@ -254,6 +254,26 @@ kbd {
 
 .costume-icon { font-size: 22px; line-height: 1.1; }
 .costume-name { font-size: 12px; font-weight: 900; color: #5b3c16; text-align: center; line-height: 1.15; }
+
+/* The ability line: what an outfit does to how the monkey plays. */
+.costume-ability {
+  font-size: 10px;
+  letter-spacing: 1px;
+  font-weight: 900;
+  color: #7a3ea1;
+  background: rgba(122, 62, 161, .12);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+.costume-card.owned .costume-ability { color: #3f7a1c; background: rgba(63, 122, 28, .12); }
+
+.costume-text {
+  font-size: 9.5px;
+  line-height: 1.25;
+  text-align: center;
+  color: #6b4a20;
+  min-height: 2.5em;
+}
 .costume-price { font-size: 13px; font-weight: 900; color: #8a5a20; }
 
 .owned-badge, .worn-badge {
@@ -282,6 +302,68 @@ kbd {
 }
 
 .hint { font-size: 11px; color: #8a6b3a; font-weight: 700; text-align: left; max-width: 240px; }
+
+/* ------------------------- Levels, abilities, sound ------------------------ */
+/* The level chip and the ability chip are .hud-item children, so they inherit
+   the HUD's gating; only their content differs. */
+.hud-level .hud-value { white-space: nowrap; }
+.hud-ability .hud-value { font-size: 18px; white-space: nowrap; }
+
+.level-banner {
+  position: fixed;
+  top: 22vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 14;
+  pointer-events: none;
+  text-align: center;
+  padding: 18px 34px;
+  border-radius: 22px;
+  background: rgba(16, 24, 16, .72);
+  border: 3px solid rgba(255, 255, 255, .35);
+  color: #fff;
+  animation: banner-pop .35s ease-out;
+}
+
+.level-banner-title {
+  font-size: 46px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  text-shadow: 0 4px 12px rgba(0, 0, 0, .55);
+}
+
+.level-banner-sub { font-size: 22px; font-weight: 800; margin-top: 6px; }
+
+@keyframes banner-pop {
+  from { transform: translateX(-50%) scale(.7); opacity: 0; }
+  to { transform: translateX(-50%) scale(1); opacity: 1; }
+}
+
+.sound-toggle {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 20;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, .35);
+  background: rgba(20, 30, 20, .55);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.sound-toggle:hover { background: rgba(20, 30, 20, .75); }
+
+.ability-line {
+  margin-top: 10px;
+  color: #6b4a20;
+  font-weight: 800;
+  text-align: center;
+}
+
+.bare-btn { align-self: flex-start; white-space: nowrap; }
 
 /* ------------------------- Top banana modal ---------------------------- */
 /* Centred, and above the shop panel: it appears while the shop is still open. */

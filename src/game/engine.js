@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { TrackPath, STEP } from './track.js';
-import { buildCostume } from './costumes.js';
+import { buildCostume, abilityFor, ABILITY_DEFAULTS } from './costumes.js';
 import { makeBananaGeometry } from './banana.js';
+import {
+  LEVELS, LEVEL_SECONDS, MENU_LEVEL_INDEX, levelAt,
+} from './levels.js';
+import { soundKit } from './audio.js';
 
 // ---------------------------------------------------------------------------
 // Tuning constants
@@ -9,7 +13,9 @@ import { makeBananaGeometry } from './banana.js';
 export const LANES = [-2.6, 0, 2.6];
 const LANE_LERP = 12;          // lane switch responsiveness
 const GRAVITY = -38;
-const JUMP_VELOCITY = 13.5;    // apex ≈ 2.4 m — clears boulders and lands on cliffs
+export const JUMP_VELOCITY = 13.5; // apex ≈ 2.4 m — clears boulders and lands on cliffs
+const SECOND_JUMP_VELOCITY = 11.6; // the mid-air boost spent by an ability's extra jump
+export const JUMP_APEX = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * Math.abs(GRAVITY));
 const BASE_SPEED = 14;         // m/s
 const MAX_SPEED = 36;
 const SPEED_RAMP = 0.04;       // per meter travelled
@@ -18,8 +24,32 @@ const GEN_AHEAD = 200;         // path/geometry generated this far ahead
 const DESPAWN_BEHIND = 26;     // recycle objects this far behind the player
 const CHUNK_LEN = 20;          // meters per road-ribbon chunk
 const CLIFF_H = 1.9;           // height of cliff platforms (jumpable: apex 2.4)
+const WALL_H = 5.5;            // walls are more than double the jump apex: never jumpable
 const CAM_BEHIND = 9;          // chase camera sits this far behind the player
 const CAM_HEIGHT = 3.5;        // …and this far above the path surface
+const SWIPE_PX = 40;           // travel along the dominant axis that makes it a swipe
+const TAP_PX = 24;             // …and staying inside this box (no duration cap) makes it a tap
+export const MONKEY_SCALE = 0.85;
+export const CHEST_Y = 0.8;    // banana collection height above the surface (× sizeScale)
+const SCENERY_COUNT = 34;      // pooled props, never more
+// One lane gap is exactly |LANES[1] − LANES[0]| = 2.6 m; the extra hair lets a
+// banana sitting *exactly* one lane over count as reachable (float equality would
+// otherwise reject it on every frame the magnet is supposed to fire).
+const MAG_LATERAL = LANES[1] - LANES[0] + 0.1;
+
+// Banana reachability envelope: nothing may spawn where the monkey cannot get to it.
+export const COLLECT_DX = 0.95;
+export const COLLECT_DS = 0.95;
+export const COLLECT_DY = 1.2;
+const BANANA_MAX_Y = JUMP_APEX + CHEST_Y + COLLECT_DY; // highest a chest can reach
+const BANANA_MIN_CLEAR = 0.55;  // …and how far clear of the rock under it it must be
+
+// Score, revives and lap pacing
+const BASE_BANANA_VALUE = 10;
+const LEVEL_BONUS = 250;
+const REVIVE_GRACE = 1.4;      // seconds of invulnerability after a doctor revive
+const PACE_PER_LAP = 0.12;     // obstacle spacing tightens ~12% per full circuit
+const PACE_MAX = 1.6;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -36,6 +66,19 @@ const PROFILE = [
 
 // Piecewise-linear lookup of the profile drop for placing scenery on the slope.
 const POS_PROFILE = PROFILE.filter(([x]) => x >= 0).sort((a, b) => a[0] - b[0]);
+
+/** Weighted pick from a theme's `[[kind, weight]]` scenery list. */
+function weightedKind(theme) {
+  const kinds = theme.scenery?.length ? theme.scenery : [['pine', 1]];
+  let total = 0;
+  for (const [, w] of kinds) total += w;
+  let roll = Math.random() * total;
+  for (const [kind, w] of kinds) {
+    roll -= w;
+    if (roll <= 0) return kind;
+  }
+  return kinds[kinds.length - 1][0];
+}
 function dropAtX(x) {
   const abs = Math.abs(x);
   for (let i = 0; i < POS_PROFILE.length - 1; i++) {
@@ -61,6 +104,164 @@ function makeSpeckleTexture() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+// ---------------------------------------------------------------------------
+// Scenery props. One pooled prop per kind, assembled from primitives with their
+// OWN materials (only the monkey shares materials), coloured from the theme so a
+// single builder serves several worlds: `tower` is a city block, a mall unit and a
+// sci-fi spire; `rock` is granite, coral or moon dust.
+// ---------------------------------------------------------------------------
+const propMat = (hex, opts = {}) =>
+  new THREE.MeshStandardMaterial({ color: hex, roughness: 0.9, ...opts });
+
+function addProp(group, geo, material, pos, scale) {
+  const m = new THREE.Mesh(geo, material);
+  m.position.set(pos[0], pos[1], pos[2]);
+  if (scale) m.scale.set(scale[0], scale[1], scale[2]);
+  m.castShadow = true;
+  group.add(m);
+  return m;
+}
+
+const PROP_BUILDERS = {
+  pine(p) {
+    const g = new THREE.Group();
+    const trunk = propMat(p.trunk, { roughness: 1 });
+    const leaf = propMat(p.leaf, { roughness: 0.95 });
+    addProp(g, new THREE.CylinderGeometry(0.16, 0.24, 1.4, 7), trunk, [0, 0.7, 0]);
+    for (let i = 0; i < 3; i++) {
+      addProp(g, new THREE.ConeGeometry(1.15 - i * 0.28, 1.1, 8), leaf, [0, 1.6 + i * 0.75, 0]);
+    }
+    return g;
+  },
+
+  palm(p) {
+    const g = new THREE.Group();
+    const trunkMat = propMat(p.trunk, { roughness: 1 });
+    const leaf = propMat(p.leaf, { roughness: 0.9 });
+    for (let i = 0; i < 4; i++) {
+      const lean = i * 0.22;
+      addProp(g, new THREE.CylinderGeometry(0.15, 0.2, 0.9, 6), trunkMat,
+        [lean * 0.35, 0.5 + i * 0.8, 0], [1, 1, 1]);
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      addProp(g, new THREE.ConeGeometry(0.34, 1.9, 5), leaf,
+        [Math.cos(a) * 0.75, 3.5, Math.sin(a) * 0.75], [1, 1, 0.35])
+        .rotation.set(Math.PI / 2 - 0.55, -a, 0);
+    }
+    return g;
+  },
+
+  cactus(p) {
+    const g = new THREE.Group();
+    const skin = propMat(p.leaf, { roughness: 0.8 });
+    addProp(g, new THREE.CapsuleGeometry(0.42, 1.6, 4, 10), skin, [0, 1.3, 0]);
+    for (const s of [-1, 1]) {
+      addProp(g, new THREE.CapsuleGeometry(0.22, 0.7, 4, 8), skin, [s * 0.62, 1.5, 0]);
+      addProp(g, new THREE.CapsuleGeometry(0.2, 0.5, 4, 8), skin, [s * 0.9, 2.1, 0]);
+    }
+    return g;
+  },
+
+  rock(p, theme) {
+    const g = new THREE.Group();
+    const stone = propMat(theme.slab, { roughness: 1, flatShading: true });
+    addProp(g, new THREE.DodecahedronGeometry(0.8, 0), stone, [0, 0.45, 0]);
+    addProp(g, new THREE.DodecahedronGeometry(0.42, 0), stone, [0.7, 0.24, 0.3]);
+    return g;
+  },
+
+  tower(p) {
+    const g = new THREE.Group();
+    const h = rand(4, 9);
+    const shell = propMat(p.trunk, { roughness: 0.8 });
+    addProp(g, new THREE.BoxGeometry(2.6, h, 2.6), shell, [0, h / 2, 0]);
+    if (p.glow) {
+      const win = propMat(p.glow, { emissive: p.glow, emissiveIntensity: 1.4, roughness: 0.4 });
+      for (let i = 0; i < Math.floor(h / 1.6); i++) {
+        addProp(g, new THREE.BoxGeometry(1.9, 0.35, 1.9), win, [0, 1.2 + i * 1.6, 0]);
+      }
+    }
+    return g;
+  },
+
+  lamp(p) {
+    const g = new THREE.Group();
+    const pole = propMat(p.trunk, { roughness: 0.7 });
+    addProp(g, new THREE.CylinderGeometry(0.09, 0.13, 3.4, 6), pole, [0, 1.7, 0]);
+    if (p.glow) {
+      const bulb = propMat(p.glow, { emissive: p.glow, emissiveIntensity: 2, roughness: 0.3 });
+      addProp(g, new THREE.SphereGeometry(0.28, 10, 8), bulb, [0, 3.5, 0]);
+    }
+    return g;
+  },
+
+  crystal(p) {
+    const g = new THREE.Group();
+    const shard = propMat(p.glow || p.leaf, {
+      emissive: p.glow || p.leaf, emissiveIntensity: 0.9, roughness: 0.25, flatShading: true,
+    });
+    for (let i = 0; i < 4; i++) {
+      const hgt = rand(1.1, 2.6);
+      addProp(g, new THREE.ConeGeometry(0.38, hgt, 5), shard,
+        [rand(-0.7, 0.7), hgt / 2, rand(-0.7, 0.7)]);
+    }
+    return g;
+  },
+
+  kelp(p) {
+    const g = new THREE.Group();
+    const weed = propMat(p.leaf, { roughness: 1 });
+    for (let i = 0; i < 6; i++) {
+      addProp(g, new THREE.SphereGeometry(0.34 - i * 0.03, 8, 6), weed,
+        [Math.sin(i * 0.7) * 0.35, 0.4 + i * 0.55, Math.cos(i * 0.5) * 0.3]);
+    }
+    return g;
+  },
+
+  cloud(p) {
+    const g = new THREE.Group();
+    const fluff = propMat(p.cloud || 0xffffff, { roughness: 1, flatShading: true });
+    for (let i = 0; i < 4; i++) {
+      addProp(g, new THREE.SphereGeometry(rand(0.7, 1.3), 8, 6), fluff,
+        [rand(-1.2, 1.2), rand(2.2, 3.4), rand(-0.6, 0.6)]);
+    }
+    return g;
+  },
+};
+
+/** Build one scenery prop of `kind` for `theme`. Unknown kinds fall back to pine. */
+function buildScenery(kind, theme) {
+  const builder = PROP_BUILDERS[kind] || PROP_BUILDERS.pine;
+  const p = { cloud: theme.hemi.sky, ...theme.props };
+  const g = builder(p, theme);
+  g.name = 'scenery';
+  return propScale(g, ...propRange(kind));
+}
+
+function propScale(g, min, max) {
+  g.userData.sceneryScale = rand(min, max);
+  return g;
+}
+
+const PROP_RANGES = {
+  pine: [0.7, 1.9], palm: [0.8, 1.5], cactus: [0.6, 1.3], rock: [0.6, 1.6],
+  tower: [0.7, 1.4], lamp: [0.8, 1.2], crystal: [0.7, 1.6], kelp: [0.9, 1.8],
+  cloud: [1.2, 2.4],
+};
+function propRange(kind) { return PROP_RANGES[kind] || [0.7, 1.6]; }
+
+/** Free the geometry + materials of one retired prop (props never share them). */
+function disposeProp(obj) {
+  const mats = new Set();
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    o.geometry?.dispose();
+    if (o.material) mats.add(o.material);
+  });
+  for (const m of mats) m.dispose();
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +340,7 @@ function buildMonkey() {
   group.traverse((o) => {
     if (o.isMesh) o.castShadow = true;
   });
-  group.scale.setScalar(0.85);
+  group.scale.setScalar(MONKEY_SCALE);
 
   return { group, body, head, armL, armR, legL, legR, tail };
 }
@@ -176,11 +377,18 @@ export class MonkeyGame {
     this._fitR = new THREE.Vector3();
     this._camTarget = new THREE.Vector3();
     this._lookAt = new THREE.Vector3();
+    this._hue = new THREE.Color();   // scratch for rainbow road bands
 
     // costumes: id -> [{host, object}], built lazily and toggled by visibility
     this.costumeId = null;
     this.costumeParts = new Map();
     this.shopT = 0;
+
+    // abilities: resolved from the worn outfit's data, never hard-coded here
+    this.ability = { ...ABILITY_DEFAULTS, id: null, label: 'Bare Monkey', text: '' };
+    this.airJumpsLeft = 0;
+    this.revivesLeft = 0;
+    this.invulnerableT = 0;
 
     this.init();
   }
@@ -194,7 +402,7 @@ export class MonkeyGame {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    const skyColor = new THREE.Color(0x8ec9ea);
+    const skyColor = new THREE.Color(levelAt(MENU_LEVEL_INDEX).sky);
     this.scene = new THREE.Scene();
     this.scene.background = skyColor;
     this.scene.fog = new THREE.Fog(skyColor, 45, 135);
@@ -203,8 +411,8 @@ export class MonkeyGame {
     this.camera.position.set(0, 3.5, 9);
 
     // lights — the sun follows the player so shadows work anywhere on the path
-    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x7a6a3f, 1.1);
-    this.scene.add(hemi);
+    this.hemi = new THREE.HemisphereLight(0xbfe3ff, 0x7a6a3f, 1.1);
+    this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff2d4, 2.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -219,7 +427,7 @@ export class MonkeyGame {
     });
     this.boulderGeo = new THREE.DodecahedronGeometry(1, 0);
     this.rockMat = new THREE.MeshStandardMaterial({ color: 0x8f8577, roughness: 0.9, flatShading: true });
-    this.cliffMat = new THREE.MeshStandardMaterial({ color: 0x6e6257, roughness: 1, flatShading: true });
+
     // Real bananas (tapered crescents with brown tips), coloured per vertex so
     // the whole pool can share one geometry + material.
     this.bananaGeo = makeBananaGeometry();
@@ -242,11 +450,12 @@ export class MonkeyGame {
 
     // pools / collections
     this.chunks = new Map();      // chunk index -> ribbon mesh
-    this.scenery = [];            // trees & rocks in local coords {obj, s, x}
-    for (let i = 0; i < 34; i++) {
-      const obj = Math.random() < 0.75 ? this.buildTree() : this.buildRock();
-      this.scene.add(obj);
-      const item = { obj, s: 0, x: 0 };
+    this.scenery = [];            // props in local coords {obj, kind, s, x}
+    // The palette must exist before the first chunk is built (band colours are
+    // baked into vertex colours at build time), so the menu theme is applied here.
+    this.setThemeColors(MENU_LEVEL_INDEX);
+    for (let i = 0; i < SCENERY_COUNT; i++) {
+      const item = { obj: null, kind: null, s: 0, x: 0 };
       this.placeScenery(item, true);
       this.scenery.push(item);
     }
@@ -266,42 +475,50 @@ export class MonkeyGame {
     this.raf = requestAnimationFrame(this.loop);
   }
 
-  placeScenery(item, initial = false) {
+  /**
+   * Re-place one pooled prop: new side, new distance ahead, and (because themes
+   * own different kinds) possibly a whole new prop. Themes with `sink: false`
+   * have no embankment to bury a palm in, so their props hug the flat shoulder.
+   */
+  placeScenery(item, initial = false, spread = false) {
+    const sunk = this.theme.sink !== false;
     const side = Math.random() < 0.5 ? -1 : 1;
-    item.x = side * rand(7.5, 28);
-    const from = initial ? 10 : this.s + rand(90, GEN_AHEAD - 30);
-    item.s = initial ? rand(-40, GEN_AHEAD) : from;
-  }
-
-  buildTree() {
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.24, 1.4, 7),
-      new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 1 })
-    );
-    trunk.position.y = 0.7;
-    g.add(trunk);
-    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f7d32, roughness: 0.9 });
-    for (let i = 0; i < 3; i++) {
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(1.15 - i * 0.28, 1.1, 8), leafMat);
-      cone.position.y = 1.6 + i * 0.75;
-      g.add(cone);
+    item.x = side * (sunk ? rand(7.5, 28) : rand(6.4, 9.4));
+    if (initial) {
+      item.s = rand(-40, GEN_AHEAD);            // the world is being built at s = 0
+    } else if (spread) {
+      item.s = this.s + rand(-40, GEN_AHEAD);   // level change: fill the whole window
+    } else {
+      item.s = this.s + rand(90, GEN_AHEAD - 30); // recycle: only ever ahead
     }
-    const s = rand(0.7, 1.9);
-    g.userData.sceneryScale = s;
-    return g;
+    this.ensurePropKind(item, weightedKind(this.theme));
   }
 
-  buildRock() {
-    const g = new THREE.Group();
-    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.8, 0), this.rockMat);
-    rock.position.y = 0.45;
-    g.add(rock);
-    g.userData.sceneryScale = rand(0.6, 1.6);
-    return g;
+  /** Swap a pooled prop for one of `kind`, freeing the old prop's GPU memory. */
+  ensurePropKind(item, kind) {
+    if (item.obj && item.kind === kind) return;
+    if (item.obj) {
+      this.scene.remove(item.obj);
+      disposeProp(item.obj);
+      item.obj = null;
+    }
+    const obj = buildScenery(kind, this.theme);
+    this.scene.add(obj);
+    item.obj = obj;
+    item.kind = kind;
+  }
+
+  /**
+   * Re-seed the prop pool for a new theme: same count (34), same slots, entirely
+   * different worlds. Positions are re-rolled too, so a level change reads as a
+   * cut to a new place rather than trees repainted in front of your face.
+   */
+  reseedScenery() {
+    for (const item of this.scenery) this.placeScenery(item, false, true);
   }
 
   // -------------------------------------------------------------------------
+  /** Start (or restart) a run. `initial` means "park on the menu", not "run". */
   reset(initial = false) {
     this.state = initial ? 'menu' : 'playing';
 
@@ -318,7 +535,11 @@ export class MonkeyGame {
     this.spawnGap = 24;
     this.sinceSpawn = this.spawnGap * 0.55;
     this.nextCliffS = 300;       // first cliff around ~300 m in
+    this.nextWallS = 480;        // …and the first unjumpable wall a bit later
     this.noWavesUntil = 0;
+
+    this.resetLevelState(initial);   // menu world, or a random theme for a real run
+    this.resetAbility();             // fresh jumps and revives from the worn outfit
 
     this.rebuildWorld();         // fresh curves + chunks + scenery at s = 0
     this.snapMonkeyUpright(); // also clears head/tail rotations (stale pose leak)
@@ -343,9 +564,8 @@ export class MonkeyGame {
     this.x = 0;                  // lateral offset
 
     for (const o of this.obstacles) { o.active = false; o.mesh.visible = false; }
-    for (const b of this.bananas) { b.group.visible = false; b.active = false; }
-    for (const c of this.cliffs) { this.scene.remove(c.group); disposeGroup(c.group); }
-    this.cliffs.length = 0;
+    for (const b of this.bananas) this.retireBanana(b);
+    while (this.cliffs.length) this.removeSlab(this.cliffs[this.cliffs.length - 1]);
 
     // rebuild ground chunks and scenery around the fresh path
     for (const [, mesh] of this.chunks) { this.scene.remove(mesh); mesh.geometry.dispose(); }
@@ -356,6 +576,129 @@ export class MonkeyGame {
     this.syncWorldTransforms();
   }
 
+  // --- themed levels --------------------------------------------------------
+  /**
+   * Paint the scene with a theme. Colours only: gravity, jump velocity and lane
+   * geometry are global constants no level may touch (see docs/levels.md).
+   */
+  setThemeColors(index) {
+    const t = levelAt(index);
+    this.levelIndex = index;
+    this.theme = t;
+
+    this.scene.background.setHex(t.sky);
+    this.scene.fog.color.setHex(t.sky);
+    this.scene.fog.near = t.fog[0];
+    this.scene.fog.far = t.fog[1];
+    this.sun.color.setHex(t.sun.color);
+    this.sun.intensity = t.sun.intensity;
+    this.hemi.color.setHex(t.hemi.sky);
+    this.hemi.groundColor.setHex(t.hemi.ground);
+    this.hemi.intensity = t.hemi.intensity;
+    this.basePlane.material.color.setHex(t.floor);
+
+    // Band colours are baked into chunk vertex colours, so they live on the engine.
+    const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+    const grass = C(t.bands.grass);
+    this.palette = {
+      road: C(t.bands.road),
+      curb: C(t.bands.curb),
+      grass,
+      edge: grass.clone().multiplyScalar(0.84),
+      deep: C(t.bands.deep),
+      slab: t.slab,
+      rainbow: !!t.rainbow,
+    };
+  }
+
+  /**
+   * Apply theme `index` to the live scene without moving the player. Safe while
+   * playing, in the menu or in the shop: it reads no run stats.
+   */
+  applyLevel(index) {
+    this.setThemeColors(clamp(Math.trunc(index), 0, LEVELS.length - 1));
+    this.rebuildChunks();  // cached chunks still hold the old band colours
+    this.reseedScenery();  // and the props belong to a different world now
+    // The HUD chip names the current theme, so it must hear about the change on this
+    // very tick — `emitHud` otherwise only fires when the score moves.
+    this.emitHud(true);
+  }
+
+  /** Cached ground chunks are vertex-coloured at build time → rebuild them all. */
+  rebuildChunks() {
+    for (const [, mesh] of this.chunks) { this.scene.remove(mesh); mesh.geometry.dispose(); }
+    this.chunks.clear();
+    this.ensureChunks();
+  }
+
+  /**
+   * Menu: always the same world. Run: roll a random theme off the ladder.
+   * Colours only — `reset()`'s own `rebuildWorld()` then builds chunks and props
+   * for the new palette, so nothing is built twice.
+   */
+  resetLevelState(initial) {
+    this.levelTimer = 0;
+    this.levelsCleared = 0;
+    this.lap = 0;
+    if (initial) {
+      this.setThemeColors(MENU_LEVEL_INDEX);
+    } else {
+      this.pickRandomLevel();
+    }
+  }
+
+  pickRandomLevel() {
+    this.setThemeColors(Math.floor(Math.random() * LEVELS.length));
+  }
+
+  /** Obstacle spacing tightens with every full circuit of the ladder. */
+  pace() {
+    return Math.min(1 + PACE_PER_LAP * this.lap, PACE_MAX);
+  }
+
+  levelInfo() {
+    const t = this.theme;
+    return {
+      index: this.levelIndex,
+      id: t.id,
+      label: t.label,
+      icon: t.icon,
+      cleared: this.levelsCleared,
+      lap: this.lap,
+      timeLeft: Math.max(0, Math.ceil(LEVEL_SECONDS - this.levelTimer)),
+    };
+  }
+
+  /** Beat the current level: next theme, banner, chime and a score bonus. */
+  completeLevel() {
+    const cleared = this.theme;
+    const next = (this.levelIndex + 1) % LEVELS.length;
+    if (next === 0) this.lap += 1;          // wrapped: a new circuit of the ladder
+    this.levelsCleared += 1;
+    this.applyLevel(next);
+    soundKit.levelClear();
+    this.cb.onLevel?.({ cleared, entering: this.theme, lap: this.lap, clearedCount: this.levelsCleared });
+  }
+
+  // --- abilities ------------------------------------------------------------
+  /**
+   * Adopt the stat block of a worn outfit (null = bare monkey). This is the only
+   * place per-costume numbers enter the engine; see docs/abilities.md.
+   */
+  applyAbility(costumeId) {
+    this.ability = abilityFor(costumeId);
+    // The scale is an ability stat: nothing else may write group.scale.
+    this.monkey.group.scale.setScalar(MONKEY_SCALE * this.ability.sizeScale);
+    this.airJumpsLeft = this.ability.extraJumps;
+    this.revivesLeft = this.ability.revives;
+    this.invulnerableT = 0;
+  }
+
+  /** Fresh counters for a new run, from whatever outfit is worn. */
+  resetAbility() {
+    this.applyAbility(this.costumeId);
+  }
+
   /** Park the camera where the chase view belongs at s = 0 (behind the start). */
   snapCameraToStart() {
     this.path.sampleTo(-CAM_BEHIND, this._P, this._T, this._U);
@@ -364,12 +707,46 @@ export class MonkeyGame {
   }
 
   start() { this.reset(false); if (this.cb.onState) this.cb.onState('playing'); }
+
+  /**
+   * Three ways out of a crash, in order: grace means it never happened, a spent
+   * revive keeps you running, and otherwise the run ends. See docs/abilities.md.
+   */
   crash() {
     if (this.state !== 'playing') return;
+    if (this.invulnerableT > 0) return;      // a revive never dies twice in one frame
+    if (this.revivesLeft > 0) { this.revive(); return; }
     this.state = 'crashed';
     this.crashTimer = 0;
     const stats = this.stats();
     if (this.cb.onGameOver) this.cb.onGameOver(stats);
+  }
+
+  /**
+   * Spend one revive: clear the obstacle that got you, hold the lane for a beat,
+   * and stay airborne-free. The slab is removed before he is snapped down, or the
+   * snap would park him on top of the wall that killed him.
+   */
+  revive() {
+    this.revivesLeft -= 1;
+    this.invulnerableT = REVIVE_GRACE;
+
+    for (const o of this.obstacles) {
+      if (o.active && Math.abs(o.s - this.s) <= 12) { o.active = false; o.mesh.visible = false; }
+    }
+    for (let i = this.cliffs.length - 1; i >= 0; i--) {
+      const c = this.cliffs[i];
+      if (c.sStart < this.s - 2 || c.sStart > this.s + 12) continue;
+      this.scene.remove(c.group);
+      disposeGroup(c.group);
+      this.cliffs.splice(i, 1);
+    }
+
+    this.py = this.groundHeightAt(this.s, this.x);
+    this.vy = 0;
+    this.grounded = true;
+    soundKit.revive();
+    this.cb.onRevive?.({ left: this.revivesLeft });
   }
 
   // --- costumes -------------------------------------------------------------
@@ -402,6 +779,8 @@ export class MonkeyGame {
       for (const p of parts) p.object.visible = on;
     }
     this.costumeId = next;
+    // Trying an outfit on is free — but it previews how the monkey *handles*, too.
+    this.applyAbility(next);
   }
 
   getCostume() { return this.costumeId; }
@@ -420,8 +799,10 @@ export class MonkeyGame {
   /** @returns false when refused (never freeze a live run from a hook) */
   enterShop() {
     if (this.state === 'playing') return false;
-    // The fitting room is always at the trailhead: nobody wants to try on a
-    // tuxedo while wedged in the crash site's boulders.
+    // The fitting room is always at the trailhead, in the menu world: nobody
+    // wants to try on a tuxedo while wedged in the crash site's boulders, and
+    // screenshots of the shop must not depend on which theme killed you.
+    this.setThemeColors(MENU_LEVEL_INDEX);
     this.rebuildWorld();
     this.snapMonkeyUpright();
     this.monkey.group.rotation.set(0, 0, 0);
@@ -478,13 +859,21 @@ export class MonkeyGame {
   }
 
   // --- test/debug hooks -----------------------------------------------------
+  /** Deterministic banana pickup: one appears at the monkey's chest. */
   testSpawnBananaAtPlayer() {
     const b = this.getFreeBanana();
-    b.active = true;
-    b.group.visible = true;
-    b.s = this.s + 0.4;
-    b.x = this.x;
-    b.y = this.py + 0.8;
+    return this.placeBanana(b, this.s + 0.4, this.x, this.py + CHEST_Y * this.ability.sizeScale);
+  }
+
+  /**
+   * Deterministic banana at a chosen spot ahead: `{ d, lane }`. Goes through
+   * `placeBanana`, so it obeys the same reachability rules as anything the game
+   * spawns. Returns the placed spot, or null when the rules refused it.
+   */
+  testSpawnBananaAhead({ d = 4, lane = this.laneIndex } = {}) {
+    const b = this.getFreeBanana();
+    if (!this.placeBanana(b, this.s + d, LANES[lane], 1.05)) return null;
+    return { s: b.s, x: b.x, y: b.y };
   }
 
   testSpawnBoulderAhead(d = 2.5) {
@@ -494,13 +883,16 @@ export class MonkeyGame {
     o.mesh.visible = true;
     o.s = this.s + d;
     o.x = this.x; // same lateral spot as the player right now → unavoidable
+    this.clearBananasUnder(o);
     return o;
   }
 
+  /** Remove **all** slabs (cliffs *and* walls) plus every active boulder. */
   testClearCliffs() {
-    for (const c of this.cliffs) { this.scene.remove(c.group); disposeGroup(c.group); }
+    for (const c of this.cliffs) this.removeSlab(c);
     this.cliffs.length = 0;
     this.nextCliffS = Infinity; // no random cliffs while testing
+    this.nextWallS = Infinity;  // …or walls
     // also remove boulder waves already rolling toward the player, so nothing
     // blocks the lane on the approach to the test cliff
     for (const o of this.obstacles) { o.active = false; o.mesh.visible = false; }
@@ -509,15 +901,81 @@ export class MonkeyGame {
   testSpawnCliffAhead() {
     // must be beyond generated samples so the flat-ground reservation applies
     const sStart = Math.max(this.path.maxGeneratedS + 70, this.s + LOOKAHEAD_S + 60);
-    const c = this.makeCliff(sStart, rand(30, 40), [0, 1, 2]); // all lanes
+    const c = this.makeSlab(sStart, rand(30, 40), [0, 1, 2], 'cliff'); // all lanes
     this.noWavesUntil = c.sEnd + 60;
-    return { sStart: c.sStart, sEnd: c.sEnd };
+    return { sStart: c.sStart, sEnd: c.sEnd, H: c.H, rideable: c.rideable };
+  }
+
+  /**
+   * Spawn an unjumpable wall ahead. Default coverage is the player's current lane
+   * only — a wall that blocked all three lanes would be a death sentence rather
+   * than a forced lane change.
+   */
+  testSpawnWallAhead(lanes = [this.laneIndex]) {
+    const sStart = Math.max(this.path.maxGeneratedS + 70, this.s + LOOKAHEAD_S + 60);
+    const c = this.makeSlab(sStart, rand(24, 34), [...lanes], 'wall');
+    this.noWavesUntil = c.sEnd + 60;
+    return { sStart: c.sStart, sEnd: c.sEnd, x: c.x, halfW: c.halfW, H: c.H };
+  }
+
+  /** Force one boulder wave right now (used by the banana audit). */
+  testSpawnWaveNow() { this.spawnWave(); return this.obstacles.filter((o) => o.active).length; }
+
+  /**
+   * Re-run the reachability rules over every active banana. Every counter must be
+   * zero: nothing buried in a slab, nothing above the reachable envelope, nothing
+   * inside a boulder. This is the regression test for "bananas float".
+   */
+  testBananaAudit() {
+    let checked = 0, buried = 0, unreachable = 0, inObstacle = 0;
+    for (const b of this.bananas) {
+      if (!b.active) continue;
+      checked++;
+      const g = this.groundHeightAt(b.s, b.x);
+      if (b.y < g + BANANA_MIN_CLEAR - 1e-6) buried++;
+      if (b.y > g + BANANA_MAX_Y + 1e-6) unreachable++;
+      for (const o of this.obstacles) {
+        if (!o.active) continue;
+        if (Math.abs(o.s - b.s) <= o.radius + 0.5 && Math.abs(o.x - b.x) <= o.radius + 0.6 &&
+            b.y < o.height + 0.45) { inObstacle++; break; }
+      }
+    }
+    const walls = this.cliffs.filter((c) => !c.rideable).length;
+    return {
+      checked, buried, unreachable, inObstacle,
+      slabs: this.cliffs.length, walls,
+    };
+  }
+
+  testJump() { this.jump(); }
+  get testAirJumpsLeft() { return this.airJumpsLeft; }
+  testSetRevives(n) { this.revivesLeft = Math.max(0, Math.trunc(n) || 0); return this.revivesLeft; }
+
+  testGetLevel() { return this.levelInfo(); }
+  testSetLevelIndex(i) { this.applyLevel(clamp(Math.trunc(i), 0, LEVELS.length - 1)); return this.levelInfo(); }
+  testClearLevelNow() {
+    this.completeLevel();
+    return this.levelInfo();
   }
 
   stats() {
-    return { score: this.score(), bananas: this.bananaCount, distance: Math.floor(this.distance) };
+    return {
+      score: this.score(),
+      bananas: this.bananaCount,
+      distance: Math.floor(this.distance),
+      level: this.levelInfo(),
+      levelsCleared: this.levelsCleared,
+      lap: this.lap,
+      ability: { id: this.ability.id, label: this.ability.label },
+    };
   }
-  score() { return Math.floor(this.distance) + this.bananaCount * 10; }
+
+  /** Score: metres + bananas (worth more in some hats) + levels beaten. */
+  score() {
+    return Math.floor(this.distance)
+      + this.bananaCount * (BASE_BANANA_VALUE + this.ability.valueBonus)
+      + this.levelsCleared * LEVEL_BONUS;
+  }
 
   emitHud(force = false) {
     const s = this.score();
@@ -529,18 +987,43 @@ export class MonkeyGame {
 
   // -------------------------------------------------------------------------
   // Input
+  /**
+   * Touch controls on the canvas. A swipe is decided by its dominant axis, so an
+   * upward flick jumps and a diagonal flick left still changes lanes; anything
+   * that stays inside TAP_PX of where it started is a tap (and also jumps). A
+   * downward swipe does nothing — there is no duck to trigger. Exactly one finger
+   * is tracked at a time: remembering the first pointerdown's `pointerId` stops a
+   * second finger from overwriting the start point mid-swipe, which used to turn
+   * two touches into phantom lane changes. Gestures decide nothing outside
+   * `playing`, so swiping over the menu or a corpse never starts a run.
+   */
   bindTouch(el) {
-    let sx = 0, sy = 0, st = 0;
-    el.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; st = performance.now(); });
-    el.addEventListener('pointerup', (e) => {
-      const dx = e.clientX - sx, dy = e.clientY - sy;
+    let id = null;      // pointerId of the gesture we are tracking, if any
+    let sx = 0, sy = 0; // where that finger landed
+
+    const end = (e) => {
+      if (id === null || e.pointerId !== id) return;
+      id = null;
       if (this.state !== 'playing') return;
-      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      const adx = Math.abs(dx), ady = Math.abs(dy);
+      if (adx >= SWIPE_PX && adx >= ady) {
         dx > 0 ? this.moveRight() : this.moveLeft();
-      } else if (performance.now() - st < 300 && Math.hypot(dx, dy) < 12) {
-        this.jump();
+      } else if (ady >= SWIPE_PX && dy < 0) {
+        this.jump(); // an upward flick always jumps
+      } else if (Math.hypot(dx, dy) <= TAP_PX) {
+        this.jump(); // a tap, however slow it was
       }
+    };
+
+    el.addEventListener('pointerdown', (e) => {
+      if (id !== null) return;         // one gesture per finger: ignore extra fingers
+      id = e.pointerId;
+      sx = e.clientX;
+      sy = e.clientY;
     });
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', (e) => { if (e.pointerId === id) id = null; });
   }
 
   onKeyDown(e) {
@@ -556,8 +1039,20 @@ export class MonkeyGame {
 
   moveLeft() { if (this.laneIndex > 0) this.laneIndex--; }
   moveRight() { if (this.laneIndex < LANES.length - 1) this.laneIndex++; }
+
+  /**
+   * Jump. From the ground this is the outfit's own jump velocity; in mid-air it
+   * spends one of the ability's extra jumps (a boost, not a re-launch).
+   */
   jump() {
-    if (this.grounded) { this.vy = JUMP_VELOCITY; this.grounded = false; }
+    if (this.grounded) {
+      this.vy = JUMP_VELOCITY * this.ability.jumpMul;
+      this.grounded = false;
+      this.airJumpsLeft = this.ability.extraJumps;
+    } else if (this.airJumpsLeft > 0) {
+      this.airJumpsLeft -= 1;
+      this.vy = SECOND_JUMP_VELOCITY;
+    }
   }
 
   onResize() {
@@ -591,11 +1086,10 @@ export class MonkeyGame {
     const colors = new Float32Array(rows * cols * 3);
     const uvs = new Float32Array(rows * cols * 2);
 
-    const grassC = new THREE.Color(0x5da24a).convertSRGBToLinear();
-    const grassEdgeC = new THREE.Color(0x4c8f3e).convertSRGBToLinear();
-    const deepC = new THREE.Color(0x2f6b28).convertSRGBToLinear();
-    const curbC = new THREE.Color(0x8d94a0).convertSRGBToLinear();
-    const roadC = new THREE.Color(0xc9b17e).convertSRGBToLinear();
+    // Band colours come from the current level theme; they are baked into vertex
+    // colours here, which is why changing levels disposes every cached chunk.
+    const { grass: grassC, edge: grassEdgeC, deep: deepC, curb: curbC, road: roadC } = this.palette;
+    const rainbow = this.palette.rainbow;
 
     let vi = 0;
     for (let r = 0; r < rows; r++) {
@@ -611,8 +1105,11 @@ export class MonkeyGame {
 
         const abs = Math.abs(cx);
         let col;
-        if (abs <= 5) col = roadC;
-        else if (abs <= 5.6) col = curbC;
+        if (abs <= 5) {
+          // Rainbow Sky: the road band cycles hue along the trail instead of
+          // being one flat colour. setHSL works in the same space as the bands.
+          col = rainbow ? this._hue.setHSL((s * 0.03) % 1, 0.72, 0.62) : roadC;
+        } else if (abs <= 5.6) col = curbC;
         else if (abs >= 30) col = deepC;
         else if (abs >= 14) col = grassEdgeC;
         else col = grassC;
@@ -665,14 +1162,62 @@ export class MonkeyGame {
     mesh.castShadow = true;
     group.add(mesh);
     this.scene.add(group);
-    const b = { group, mesh, active: false, s: 0, x: 0, y: 1, spin: Math.random() * 6 };
+    const b = { group, mesh, active: false, s: 0, x: 0, y: 1, spin: Math.random() * 6, owner: null };
     this.bananas.push(b);
     return b;
   }
 
+  /**
+   * The only way a banana enters the world. `y` is a suggestion: the helper
+   * resolves the ground under the spot (the top of whatever solid occupies it) and
+   * refuses or lowers the placement so nothing can float out of reach, hide inside
+   * rock, or sit in a boulder you would die on first. Returns true when the banana
+   * actually activated. See docs/architecture.md → "Banana reachability".
+   */
+  placeBanana(b, s, x, y, owner = null) {
+    const g = this.groundHeightAt(s, x);
+    // Buried in (or just under) the surface of a cliff top or wall body: invisible
+    // and uncollectable, so don't place it at all.
+    if (y < g + BANANA_MIN_CLEAR) return false;
+
+    let yy = Math.min(y, g + BANANA_MAX_Y); // never above a max-height jump's chest
+
+    for (const o of this.obstacles) {
+      if (!o.active) continue;
+      if (Math.abs(o.s - s) <= o.radius + 0.5 && Math.abs(o.x - x) <= o.radius + 0.6 &&
+          yy < o.height + 0.45) return false; // you'd die on the rock before reaching it
+    }
+
+    b.active = true;
+    b.group.visible = true;
+    b.s = s;
+    b.x = x;
+    b.y = yy;
+    b.owner = owner;   // whose bananas these are — see retireBanana()
+    return true;
+  }
+
+  /** Retire a banana (and forget its owner) so nothing lingers behind. */
+  retireBanana(b) {
+    b.active = false;
+    b.group.visible = false;
+    b.owner = null;
+  }
+
+  /** Retire any banana sitting inside a boulder's volume — nothing outruns a rock. */
+  clearBananasUnder(o) {
+    for (const b of this.bananas) {
+      if (!b.active) continue;
+      if (Math.abs(b.s - o.s) > o.radius + 0.5) continue;
+      if (Math.abs(b.x - o.x) > o.radius + 0.6) continue;
+      if (b.y >= o.height + 0.45) continue;
+      this.retireBanana(b);
+    }
+  }
+
   spawnWave() {
     const spawnS = this.s + LOOKAHEAD_S;
-    // keep wave obstacles out of cliff zones so cliffs read clearly
+    // keep wave obstacles out of slab zones so cliffs and walls read clearly
     for (const c of this.cliffs) {
       if (spawnS > c.sStart - 10 && spawnS < c.sEnd + 6) return;
     }
@@ -695,18 +1240,18 @@ export class MonkeyGame {
       const sc = new THREE.Vector3(s * rand(0.9, 1.1), s * rand(0.8, 0.95), s);
       o.mesh.scale.copy(sc);
       o.quat.setFromEuler(new THREE.Euler(rand(0, 1), rand(0, Math.PI), rand(0, 1)));
+      // A boulder may land on bananas an earlier wave already laid down.
+      this.clearBananasUnder(o);
 
-      // banana arc over the boulder — rewards jumping
+      // Banana arc over the boulder — rewards jumping. Authored *from* the rock's
+      // own height so a big boulder can never swallow its own reward line.
       if (Math.random() < 0.6) {
         const n = 7;
+        const low = Math.max(0.9, o.height + 0.5);
+        const high = low + 1.15;
         for (let i = 0; i < n; i++) {
           const t = (i / (n - 1)) * 2 - 1; // -1..1 across the arc
-          const b = this.getFreeBanana();
-          b.active = true;
-          b.group.visible = true;
-          b.s = o.s + t * 4.2;
-          b.x = o.x;
-          b.y = 0.9 + (2.05 - 0.9) * (1 - t * t);
+          this.placeBanana(this.getFreeBanana(), o.s + t * 4.2, o.x, low + (high - low) * (1 - t * t));
         }
       }
     }
@@ -716,52 +1261,102 @@ export class MonkeyGame {
       const free = [0, 1, 2].filter((l) => !blocked.includes(l));
       const lane = free[Math.floor(Math.random() * free.length)];
       for (let i = 0; i < 6; i++) {
-        const b = this.getFreeBanana();
-        b.active = true;
-        b.group.visible = true;
-        b.s = spawnS - i * 1.4;
-        b.x = LANES[lane];
-        b.y = 1.05;
+        this.placeBanana(this.getFreeBanana(), spawnS - i * 1.4, LANES[lane], 1.05);
       }
     }
 
     this.spawnGap = clamp(this.speed * 1.35, 20, 36);
   }
 
-  // --- giant cliffs: jump ON them, ride the banana trail, fall off the end --
-  scheduleCliffs() {
-    if (this.path.maxGeneratedS < this.nextCliffS - 80) return;
-    const sStart = Math.max(this.path.maxGeneratedS + 70, this.s + LOOKAHEAD_S + 60);
-    const len = rand(30, 45);
+  // --- slabs: rideable cliffs and unjumpable walls --------------------------
+  /**
+   * One scheduler for both kinds of monolith. Spacing is by distance and tightens
+   * with every lap; a slab's start is pushed past any already-scheduled slab it
+   * would overlap, so a wall never grows inside a cliff (or vice versa) where the
+   * player would have nowhere to go.
+   */
+  scheduleSlabs() {
+    const pace = this.pace();
+    if (this.path.maxGeneratedS >= this.nextCliffS - 80) this.scheduleSlab('cliff', pace);
+    if (this.path.maxGeneratedS >= this.nextWallS - 80) this.scheduleSlab('wall', pace);
+  }
 
-    // coverage: whole road (forced jump) or 1–2 lanes (dodgeable)
+  scheduleSlab(kind, pace) {
+    // must be beyond generated samples so the flat-ground reservation applies
+    const sStart = Math.max(this.path.maxGeneratedS + 70, this.s + LOOKAHEAD_S + 60);
+    const len = kind === 'cliff' ? rand(30, 45) : rand(24, 38);
+
     let cover;
-    if (Math.random() < 0.4) {
-      cover = [0, 1, 2];
+    if (kind === 'cliff') {
+      // cliffs may be a forced jump (whole road) or dodgeable (1–2 lanes)
+      if (Math.random() < 0.4) {
+        cover = [0, 1, 2];
+      } else {
+        const count = Math.random() < 0.5 ? 1 : 2;
+        const startLane = Math.floor(Math.random() * (4 - count)); // contiguous lanes
+        cover = [];
+        for (let i = 0; i < count; i++) cover.push(startLane + i);
+      }
     } else {
-      const count = Math.random() < 0.5 ? 1 : 2;
-      const startLane = Math.floor(Math.random() * (4 - count)); // keeps lanes contiguous
+      // A wall is never jumpable, so it may never block all three lanes: that would
+      // be a death sentence rather than a forced lane change.
+      const count = Math.random() < 0.6 ? 1 : 2;
+      const startLane = Math.floor(Math.random() * (4 - count));
       cover = [];
       for (let i = 0; i < count; i++) cover.push(startLane + i);
     }
-    this.makeCliff(sStart, len, cover);
-    this.nextCliffS = sStart + rand(180, 320);
+
+    const slab = this.makeSlab(sStart, len, cover, kind); // may have been pushed back
+    const gap = kind === 'cliff' ? rand(180, 320) : rand(260, 470);
+    if (kind === 'cliff') this.nextCliffS = slab.sStart + gap / pace;
+    else this.nextWallS = slab.sStart + gap / pace;
   }
 
-  makeCliff(sStart, len, coveredLanes) {
-    const lo = LANES[coveredLanes[0]], hi = LANES[coveredLanes[coveredLanes.length - 1]];
+  /** Push a slab's start past every scheduled slab it would grow inside of. */
+  slabStartAfter(sStart, len) {
+    let s = sStart;
+    let moved = true;
+    while (moved) {
+      moved = false;
+      for (const c of this.cliffs) {
+        if (s < c.sEnd + 12 && s + len + 12 > c.sStart) {
+          s = Math.max(s, c.sEnd + 12);
+          moved = true;
+        }
+      }
+    }
+    return s;
+  }
+
+  /**
+   * Build one monolith. Cliffs (`CLIFF_H`, rideable, banana trail + lure) you jump
+   * ONTO; walls (`WALL_H`, never rideable, no bananas at all) exist to force a lane
+   * change. Both are painted from the theme's slab colour — their materials are
+   * per-slab, so existing slabs keep the colour of the world they were born in.
+   */
+  makeSlab(sStartIn, len, coveredLanes, kind = 'cliff') {
+    // Every slab — scheduled or test-spawned — clears the same gap, so slabs never
+    // grow inside each other (a wall inside a cliff would read as one impossible
+    // object, and its bananas would audit as buried).
+    const sStart = this.slabStartAfter(sStartIn, len);
+    const lanes = [...coveredLanes].sort((a, b) => a - b);
+    const lo = LANES[lanes[0]], hi = LANES[lanes[lanes.length - 1]];
     const margin = 1.45;
     const x = (lo + hi) / 2;
     const halfW = (hi - lo) / 2 + margin;
+    const rideable = kind !== 'wall';
 
-    // reserve a flat straight under/over the cliff so it sits flush on the path
+    // reserve a flat straight under/over the slab so it sits flush on the path
     this.path.addForcedStraight(sStart - 8, sStart + len + 8);
 
     const group = new THREE.Group();
-    const H = CLIFF_H;
+    const H = rideable ? CLIFF_H : WALL_H;
     const depth = len;
     const boxH = H + 7; // sinks below the road so it reads as a giant monolith
-    const box = new THREE.Mesh(new THREE.BoxGeometry(halfW * 2, boxH, depth), this.cliffMat);
+    const mat = new THREE.MeshStandardMaterial({
+      color: this.palette.slab, roughness: 1, flatShading: true,
+    });
+    const box = new THREE.Mesh(new THREE.BoxGeometry(halfW * 2, boxH, depth), mat);
     box.position.y = H - boxH / 2;
     box.castShadow = true;
     box.receiveShadow = true;
@@ -787,33 +1382,54 @@ export class MonkeyGame {
     }
 
     this.scene.add(group);
-    const cliff = { group, sStart, sEnd: sStart + len, x, halfW, H };
-    this.cliffs.push(cliff);
+    const slab = { group, mat, sStart, sEnd: sStart + len, x, halfW, H, rideable };
+    this.cliffs.push(slab);
 
-    // banana trail along the top of every covered lane (+ a lure at the face)
-    const sEnd = sStart + len;
-    for (const lane of coveredLanes) {
-      const bx = LANES[lane];
-      if (Math.abs(bx - x) <= halfW + 0.3) {
-        const lead = this.getFreeBanana();
-        lead.active = true;
-        lead.group.visible = true;
-        lead.s = sStart - 2.4;
-        lead.x = bx;
-        lead.y = H + 0.55; // jump here to land on the cliff
+    // Cliffs get a banana trail along the top of every covered lane plus a lure at
+    // the face. Walls get none at all: they are not rideable, so a trail on top
+    // would be exactly the floating bait the reachability rules exist to kill.
+    if (rideable) {
+      const sEnd = slab.sEnd;
+      for (const lane of lanes) {
+        const bx = LANES[lane];
+        if (Math.abs(bx - x) > halfW + 0.3) continue;
+        this.placeBanana(this.getFreeBanana(), sStart - 2.4, bx, H + 0.55, slab); // jump here
         for (let bs = sStart + 3.5; bs < sEnd - 1.5; bs += 3) {
-          const b = this.getFreeBanana();
-          b.active = true;
-          b.group.visible = true;
-          b.s = bs;
-          b.x = bx;
-          b.y = H + 1.05; // reachable while riding the top
+          this.placeBanana(this.getFreeBanana(), bs, bx, H + 1.05, slab); // ride the trail
         }
       }
     }
-    return cliff;
+    return slab;
   }
 
+  /**
+   * Drop one slab, freeing its geometry/material **and retiring every banana that
+   * belonged to it**. A cliff trail left behind by a removed slab would otherwise
+   * hang in mid-air over bare road for the rest of the run — precisely the floating
+   * bait this whole system exists to prevent.
+   */
+  removeSlab(c) {
+    for (const b of this.bananas) if (b.active && b.owner === c) this.retireBanana(b);
+    const i = this.cliffs.indexOf(c);
+    if (i !== -1) this.cliffs.splice(i, 1);
+    this.scene.remove(c.group);
+    disposeGroup(c.group);
+    c.mat?.dispose();
+  }
+
+  /** Slabs behind the player are gone for good — nothing accumulates in a long run. */
+  pruneSlabs() {
+    for (let i = this.cliffs.length - 1; i >= 0; i--) {
+      const c = this.cliffs[i];
+      if (c.sEnd < this.s - DESPAWN_BEHIND) this.removeSlab(c);
+    }
+  }
+
+  /**
+   * Height of the solid surface under (s, x): the road is 0, and every slab that
+   * covers the spot contributes its top. Walls are included precisely because they
+   * are taller than any jump — a monkey who cannot get above one can only crash.
+   */
   groundHeightAt(s, x) {
     let h = 0;
     for (const c of this.cliffs) {
@@ -888,8 +1504,12 @@ export class MonkeyGame {
 
     let worldSpeed;
     if (playing) {
-      this.speed = Math.min(MAX_SPEED, BASE_SPEED + this.distance * SPEED_RAMP);
+      // The distance ramp is capped, then the outfit's speed multiplier is applied:
+      // faster means more score per metre and less time to read the trail.
+      const target = Math.min(MAX_SPEED, BASE_SPEED + this.distance * SPEED_RAMP);
+      this.speed = target * this.ability.speedMul;
       worldSpeed = this.speed;
+      if (this.invulnerableT > 0) this.invulnerableT = Math.max(0, this.invulnerableT - dt);
     } else if (crashed) {
       this.crashTimer += dt;
       this.speed = Math.max(0, this.speed - 30 * dt); // skid to a stop
@@ -905,7 +1525,16 @@ export class MonkeyGame {
 
     const prevS = this.s;
     this.s += worldSpeed * dt;
-    if (playing) this.distance += worldSpeed * dt;
+    if (playing) {
+      this.distance += worldSpeed * dt;
+      // Themed levels: survive LEVEL_SECONDS on a theme and you beat it. The timer
+      // never advances in menu/shop/crashed/over — parking on the menu is not a win.
+      this.levelTimer += dt;
+      if (this.levelTimer >= LEVEL_SECONDS) {
+        this.levelTimer -= LEVEL_SECONDS; // keep the remainder across the change
+        this.completeLevel();
+      }
+    }
 
     this.path.ensure(this.s + GEN_AHEAD);
     this.path.prune(this.s - 80);
@@ -934,28 +1563,33 @@ export class MonkeyGame {
       const pyStart = this.py;
       const gh = this.groundHeightAt(this.s, this.x);
       if (!this.grounded) {
-        this.vy += GRAVITY * dt;
+        // fallMul only scales gravity while falling: the jump still feels snappy on
+        // the way up but hangs on the way down (umbrellas and wings do this).
+        this.vy += GRAVITY * (this.vy < 0 ? this.ability.fallMul : 1) * dt;
         this.py += this.vy * dt;
         // Land only on a surface he was already above when the frame began. Without
         // that test a late jump slips through the cliff face and snaps onto its top.
         if (this.py <= gh && pyStart >= gh) {
           this.py = gh; this.vy = 0; this.grounded = true;
+          this.airJumpsLeft = this.ability.extraJumps; // landing refills air jumps
         } else if (pyStart < gh - 0.35) {
           this.crash(); // entered a taller surface from below or sideways
         }
       } else {
         if (gh - this.py > 0.45) {
-          this.crash(); // walked/lane-changed into the side of a cliff
+          this.crash(); // walked/lane-changed into the side of a cliff or wall
         } else if (Math.abs(gh - this.py) < 0.45) {
           this.py = gh; // stick to surface / step up onto a cliff edge
         } else {
           this.grounded = false; // ran off the end of a cliff → fall!
           this.vy = 0;
+          this.airJumpsLeft = this.ability.extraJumps;
         }
       }
 
-      // giant cliffs appear ahead on the path
-      this.scheduleCliffs();
+      // cliffs and walls appear ahead on the path
+      this.scheduleSlabs();
+      this.pruneSlabs();
 
       // spawn waves by distance travelled
       this.sinceSpawn += worldSpeed * dt;
@@ -964,7 +1598,7 @@ export class MonkeyGame {
         this.spawnWave();
       }
 
-      // cliff face crash: entered a cliff from the front while too low
+      // slab face crash: crossed a slab's front edge while below its lip
       for (const c of this.cliffs) {
         if (prevS < c.sStart && this.s >= c.sStart &&
             Math.abs(this.x - c.x) <= c.halfW + 0.35 && pyStart < c.H - 0.35) {
@@ -972,28 +1606,43 @@ export class MonkeyGame {
         }
       }
 
-      // boulder collisions (track-local!)
+      // boulder collisions (track-local!). The padding is the only ability-scaled
+      // part of obstacle geometry — slab edges stay exact, so the cliff-clip
+      // regression keeps its meaning.
+      const hb = this.ability.hitboxScale;
       for (const o of this.obstacles) {
         if (!o.active) continue;
         if (o.s < this.s - DESPAWN_BEHIND) { o.active = false; o.mesh.visible = false; continue; }
         const dx = Math.abs(o.x - this.x);
         const ds = Math.abs(o.s - this.s);
-        if (dx < o.radius + 0.42 && ds < o.radius + 0.35 && this.py < o.height - 0.4) {
+        if (dx < o.radius + 0.42 * hb && ds < o.radius + 0.35 * hb && this.py < o.height - 0.4) {
           this.crash();
         }
       }
 
-      // banana collection
+      // banana collection (+ a dog-shaped magnet, and a chomp per pickup)
+      const size = this.ability.sizeScale;
+      const chestY = CHEST_Y * size;
+      const grow = 0.45 * (size - 1);            // bigger monkey, wider grab box
+      const dLim = COLLECT_DX + grow;
+      const sLim = COLLECT_DS + grow;
+      const magnet = this.ability.magnet;
       for (const b of this.bananas) {
         if (!b.active) continue;
-        if (b.s < this.s - DESPAWN_BEHIND) { b.active = false; b.group.visible = false; continue; }
+        if (b.s < this.s - DESPAWN_BEHIND) { this.retireBanana(b); continue; }
+        // The magnet only ever pulls bananas that are *ahead* and at most one lane
+        // over: never backwards, never across the whole road.
+        if (magnet > 0 && b.s - this.s > 0 && b.s - this.s <= magnet &&
+            Math.abs(b.x - this.x) <= MAG_LATERAL) {
+          b.x = lerp(b.x, this.x, clamp(dt * 5, 0, 1));
+        }
         const dx = Math.abs(b.x - this.x);
         const ds = Math.abs(b.s - this.s);
-        const dy = Math.abs(b.y - (this.py + 0.8));
-        if (dx < 0.95 && ds < 0.95 && dy < 1.2) {
-          b.active = false;
-          b.group.visible = false;
+        const dy = Math.abs(b.y - (this.py + chestY));
+        if (dx < dLim && ds < sLim && dy < COLLECT_DY) {
+          this.retireBanana(b);
           this.bananaCount++;
+          soundKit.pickup(this.bananaCount); // a streak plays a rising run
         }
       }
 
